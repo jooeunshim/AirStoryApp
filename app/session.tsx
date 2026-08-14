@@ -1,9 +1,9 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import * as Location from "expo-location";
 import { useFocusEffect, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import { useAuth } from "./authContext";
 import { manager, useBLE } from "./bleContext";
 
 const SERVICE_UUID = "0000181A-0000-1000-8000-00805F9B34FB";
@@ -26,6 +26,13 @@ function RecordingBadge() {
 export default function Session() {
   const router = useRouter();
   const { connectedDevice } = useBLE();
+  const { profile } = useAuth();
+
+  // Account-synced profile (cached offline) stamps the session metadata into each CSV row.
+  const className = profile?.instructor || "";
+  const school = profile?.schoolCode || "";
+  const period = profile?.period || "";
+  const group = profile?.groupCode || "";
 
   const [initialized, setInitialized] = useState(false);
 
@@ -54,29 +61,10 @@ export default function Session() {
   const [lat, setLat] = useState(0);
   const [lon, setLon] = useState(0);
   const [battery, setBattery] = useState(0);
-  const [className, setClassName] = useState("");
-  const [school, setSchool] = useState("");
-  const [period, setPeriod] = useState("");
-  const [group, setGroup] = useState("");
   const [isReceiving, setIsReceiving] = useState(false);
 
   const csvRows = useRef<string[]>([]);
   const timerRef = useRef<any>(null);
-
-  const loadSettings = async () => {
-    try {
-      const c = await AsyncStorage.getItem("className");
-      const p = await AsyncStorage.getItem("period");
-      const g = await AsyncStorage.getItem("group");
-      const s = await AsyncStorage.getItem("school");
-      if (s) setSchool(s);
-      if (c) setClassName(c);
-      if (p) setPeriod(p);
-      if (g) setGroup(g);
-    } catch (e) {
-      console.log("Load settings error:", e);
-    }
-  };
 
   useEffect(() => {
     timerRef.current = setInterval(() => {
@@ -87,7 +75,6 @@ export default function Session() {
       connectAndListen(connectedDevice.id);
     }
     getLocation();
-    loadSettings();
 
     return () => {
       clearInterval(timerRef.current);

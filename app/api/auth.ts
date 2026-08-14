@@ -31,6 +31,27 @@ export async function getMe(): Promise<any> {
   return apiRequest("/auth/me");
 }
 
+export interface UpdateProfileArgs {
+  schoolCode?: string;
+  instructor?: string;
+  period?: string;
+  groupCode?: string;
+}
+
+/**
+ * Update the signed-in user's own profile row (school / instructor / period / group) via
+ * PATCH /auth/me/profile — the same endpoint the web My Page uses, so changes sync across
+ * web and phone for the same account. Partial update: only provided fields change.
+ */
+export async function updateMyProfile(args: UpdateProfileArgs): Promise<any> {
+  const body: Record<string, string> = {};
+  if (args.schoolCode !== undefined) body.schoolCode = args.schoolCode;
+  if (args.instructor !== undefined) body.instructor = args.instructor;
+  if (args.period !== undefined) body.period = args.period;
+  if (args.groupCode !== undefined) body.groupCode = args.groupCode;
+  return apiRequest("/auth/me/profile", { method: "PATCH", body: JSON.stringify(body) });
+}
+
 export interface RegisterArgs {
   email: string;
   password: string;

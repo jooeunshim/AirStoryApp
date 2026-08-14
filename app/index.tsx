@@ -1,70 +1,56 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useFocusEffect, useRouter } from "expo-router";
-import React, { useState } from "react";
+import { useRouter } from "expo-router";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { logout } from "./api/auth";
+import { useAuth } from "./authContext";
 import { useBLE } from "./bleContext";
 
 export default function Index() {
   const router = useRouter();
   const { connectedDevice } = useBLE();
-  const [groupSet, setGroupSet] = useState(true);
-  const [period, setPeriod] = useState("");
-  const [group, setGroup] = useState("");
-  const [school, setSchool] = useState("");
-  const [instructor, setInstructor] = useState("");
+  const { profile, role } = useAuth();
+  const isTeacher = role === "teacher";
 
-  useFocusEffect(
-    React.useCallback(() => {
-      checkGroupSettings();
-    }, [])
-  );
-
-  const checkGroupSettings = async () => {
-    try {
-      const g = await AsyncStorage.getItem("group");
-      const p = await AsyncStorage.getItem("period");
-      const s = await AsyncStorage.getItem("school");
-      const c = await AsyncStorage.getItem("className");
-      setSchool(s || "");
-      setInstructor(c || "");
-      if (!g) {
-        setGroupSet(false);
-      } else {
-        setGroupSet(true);
-        setGroup(g);
-        setPeriod(p || "");
-      }
-    } catch (e) {
-      console.log("Check settings error:", e);
-    }
-  };
+  // Profile is the source of truth (synced to the account); cached for offline launches.
+  const school = profile?.schoolCode || "";
+  const instructor = profile?.instructor || "";
+  const period = profile?.period || "";
+  const group = profile?.groupCode || "";
+  const groupSet = Boolean(group);
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>AirStory</Text>
       <Text style={styles.subtitle}>TAMGU Lab</Text>
       {school ? <Text style={styles.school}>{school}</Text> : null}
-      {groupSet && period && group ? (
+      {groupSet && period ? (
         <Text style={styles.groupInfo}>
           {instructor ? `${instructor} | ` : ""}Period {period} | Group {group}
         </Text>
       ) : null}
 
-      {!groupSet && (
-        <View style={styles.warningBadge}>
-          <Text style={styles.warningTitle}>Group not set</Text>
-          <Text style={styles.warningText}>
-            Set your Group in Settings before starting a session.
-          </Text>
-          <TouchableOpacity
-            style={styles.warningButton}
-            onPress={() => router.push("/settings")}
-          >
-            <Text style={styles.warningButtonText}>Go to Settings →</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      {!groupSet &&
+        (isTeacher ? (
+          <View style={styles.warningBadge}>
+            <Text style={styles.warningTitle}>Group not set</Text>
+            <Text style={styles.warningText}>
+              Set your Group in Settings before starting a session.
+            </Text>
+            <TouchableOpacity
+              style={styles.warningButton}
+              onPress={() => router.push("/settings")}
+            >
+              <Text style={styles.warningButtonText}>Go to Settings →</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.warningBadge}>
+            <Text style={styles.warningTitle}>No group yet</Text>
+            <Text style={styles.warningText}>
+              Your teacher will place you in a group. You can connect a sensor now; your group will
+              appear here once assigned.
+            </Text>
+          </View>
+        ))}
 
       {connectedDevice ? (
         <View style={styles.connectedBadge}>

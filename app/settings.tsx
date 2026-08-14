@@ -1,137 +1,185 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { updateMyProfile } from "./api/auth";
+import { useAuth } from "./authContext";
 import { manager, useBLE } from "./bleContext";
 
 export default function Settings() {
   const router = useRouter();
   const { connectedDevice, setConnectedDevice } = useBLE();
+  const { profile, role, refreshMe } = useAuth();
+  const isTeacher = role === "teacher";
+  const insets = useSafeAreaInsets();
+
+  // Editable copies (teacher only). Period is synced in the web's "P#" format; we edit just the digits.
   const [school, setSchool] = useState("");
   const [instructor, setInstructor] = useState("");
-  const [period, setPeriod] = useState("");
+  const [periodDigits, setPeriodDigits] = useState("");
   const [group, setGroup] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
+  // Seed the form from the account profile whenever it changes (login, refresh, save).
   useEffect(() => {
-    loadSettings();
-  }, []);
+    setSchool(profile?.schoolCode || "");
+    setInstructor(profile?.instructor || "");
+    setPeriodDigits((profile?.period || "").replace(/^[Pp]/, ""));
+    setGroup(profile?.groupCode || "");
+  }, [profile?.schoolCode, profile?.instructor, profile?.period, profile?.groupCode]);
 
-  const loadSettings = async () => {
+  // Free-text names: strip only CSV-breaking characters (matches the web sanitizer).
+  const sanitizeName = (t: string) => t.replace(/[",\n\r]/g, "").substring(0, 60);
+  const sanitizeGroup = (t: string) => t.replace(/[^a-zA-Z0-9가-힣]/g, "").substring(0, 16);
+
+  const saveProfile = async () => {
+    setError("");
+    setSaving(true);
     try {
-      const s = await AsyncStorage.getItem("school");
-      const c = await AsyncStorage.getItem("className");
-      const p = await AsyncStorage.getItem("period");
-      const g = await AsyncStorage.getItem("group");
-      if (s) setSchool(s);
-      if (c) setInstructor(c);
-      if (p) setPeriod(p);
-      if (g) setGroup(g);
-    } catch (e) {
-      console.log("Load settings error:", e);
-    }
-  };
-
-  const sanitize = (text: string) => {
-    return text.replace(/[^a-zA-Z0-9가-힣]/g, "").substring(0, 20);
-  };
-
-  // School / instructor are free-text names; only strip CSV-breaking characters.
-  const sanitizeName = (text: string) => {
-    return text.replace(/[",\n\r]/g, "").substring(0, 60);
-  };
-
-  const saveSettings = async () => {
-    if (!period || !group) {
-      alert("Please fill in all fields.");
-      return;
-    }
-    try {
-      await AsyncStorage.setItem("school", school.trim());
-      await AsyncStorage.setItem("className", instructor.trim());
-      await AsyncStorage.setItem("period", period);
-      await AsyncStorage.setItem("group", sanitize(group));
+      const period = periodDigits ? `P${periodDigits}` : "";
+      await updateMyProfile({
+        schoolCode: school.trim(),
+        instructor: instructor.trim(),
+        period,
+        groupCode: group.trim(),
+      });
+      // Pull the saved values back and refresh the offline cache, then return home.
+      await refreshMe();
       router.replace("/");
-    } catch (e) {
-      console.log("Save settings error:", e);
+    } catch (e: any) {
+      setError(e?.message || "Could not save. Check your connection and try again.");
+    } finally {
+      setSaving(false);
     }
   };
 
-const resetAll = async () => {
-    Alert.alert(
-      "Reset All",
-      "This will reset all settings and device connection. Are you sure?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Reset All",
-          style: "destructive",
-          onPress: async () => {
-            if (connectedDevice) {
-              try {
-                await manager.cancelDeviceConnection(connectedDevice.id);
-              } catch (e) {
-                console.log("Disconnect error:", e);
-              }
+  const disconnectDevice = () => {
+    Alert.alert("Disconnect Device", "Disconnect the current sensor?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Disconnect",
+        style: "destructive",
+        onPress: async () => {
+          if (connectedDevice) {
+            try {
+              await manager.cancelDeviceConnection(connectedDevice.id);
+            } catch (e) {
+              console.log("Disconnect error:", e);
             }
-            setConnectedDevice(null);
-            await AsyncStorage.clear();
-            setPeriod("");
-            setGroup("");
-            Alert.alert("Done", "All settings and device connection have been reset.");
           }
-        }
-      ]
-    );
+          setConnectedDevice(null);
+          // Only the device pairing is local now; the profile lives on the account.
+          await AsyncStorage.removeItem("savedMacAddress").catch(() => {});
+          Alert.alert("Done", "Device disconnected.");
+        },
+      },
+    ]);
   };
+
+  const readOnly = (label: string, value: string) => (
+    <View key={label}>
+      <Text style={styles.label}>{label}</Text>
+      <View style={styles.readonlyBox}>
+        <Text style={styles.readonlyText}>{value || "—"}</Text>
+      </View>
+    </View>
+  );
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Group Settings</Text>
-      <Text style={styles.subtitle}>Set your school and class details</Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+    >
+      <Text style={styles.title}>Profile</Text>
+      <Text style={styles.subtitle}>
+        {isTeacher
+          ? "Your class details, synced to your account."
+          : "Set by your teacher, synced to your account."}
+      </Text>
 
-      <Text style={styles.label}>School</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. Lincoln High School"
-        value={school}
-        onChangeText={(text) => setSchool(sanitizeName(text))}
-        maxLength={60}
-      />
+      {readOnly("Name", profile?.fullName || "")}
 
-      <Text style={styles.label}>Class (Instructor)</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. Mr. Smith"
-        value={instructor}
-        onChangeText={(text) => setInstructor(sanitizeName(text))}
-        maxLength={60}
-      />
+      {isTeacher ? (
+        <>
+          <Text style={styles.label}>School</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. Lincoln High School"
+            value={school}
+            onChangeText={(t) => setSchool(sanitizeName(t))}
+            maxLength={60}
+            editable={!saving}
+          />
 
-      <Text style={styles.label}>Period</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. 1"
-        value={period}
-        onChangeText={(text) => setPeriod(text.replace(/[^0-9]/g, "").substring(0, 1))}
-        keyboardType="numeric"
-        maxLength={1}
-      />
+          <Text style={styles.label}>Class (Instructor)</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. Mr. Smith"
+            value={instructor}
+            onChangeText={(t) => setInstructor(sanitizeName(t))}
+            maxLength={60}
+            editable={!saving}
+          />
 
-      <Text style={styles.label}>Group Name</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. G1"
-        value={group}
-        onChangeText={(text) => setGroup(sanitize(text))}
-        maxLength={20}
-      />
+          <Text style={styles.label}>Period</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. 1"
+            value={periodDigits}
+            onChangeText={(t) => setPeriodDigits(t.replace(/[^0-9]/g, "").substring(0, 2))}
+            keyboardType="numeric"
+            maxLength={2}
+            editable={!saving}
+          />
 
-      <TouchableOpacity style={styles.buttonPrimary} onPress={saveSettings}>
-        <Text style={styles.buttonText}>Save</Text>
-      </TouchableOpacity>
+          <Text style={styles.label}>Group</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="e.g. G1"
+            value={group}
+            onChangeText={(t) => setGroup(sanitizeGroup(t))}
+            maxLength={16}
+            editable={!saving}
+          />
 
-       <TouchableOpacity style={styles.buttonReset} onPress={resetAll}>
-        <Text style={styles.buttonResetText}>Reset All Settings & Device</Text>
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+
+          <TouchableOpacity
+            style={[styles.buttonPrimary, saving && styles.btnDisabled]}
+            onPress={saveProfile}
+            disabled={saving}
+          >
+            {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Save</Text>}
+          </TouchableOpacity>
+        </>
+      ) : (
+        <>
+          {readOnly("School", profile?.schoolCode || "")}
+          {readOnly("Class (Instructor)", profile?.instructor || "")}
+          {readOnly("Period", profile?.period || "")}
+          {readOnly("Group", profile?.groupCode || "")}
+          <View style={styles.noteBox}>
+            <Text style={styles.noteText}>
+              Your school, period, and group are assigned by your teacher. Ask your teacher to update
+              them if anything looks wrong.
+            </Text>
+          </View>
+        </>
+      )}
+
+      <TouchableOpacity style={styles.buttonReset} onPress={disconnectDevice}>
+        <Text style={styles.buttonResetText}>Disconnect Device</Text>
       </TouchableOpacity>
 
       <TouchableOpacity onPress={() => router.back()} style={styles.back}>
@@ -145,6 +193,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#fff",
+  },
+  content: {
     padding: 24,
     paddingTop: 60,
   },
@@ -173,12 +223,43 @@ const styles = StyleSheet.create({
     fontSize: 17,
     marginBottom: 20,
   },
+  readonlyBox: {
+    borderWidth: 1,
+    borderColor: "#eee",
+    backgroundColor: "#f9f9f9",
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 20,
+  },
+  readonlyText: {
+    fontSize: 17,
+    color: "#555",
+  },
+  noteBox: {
+    backgroundColor: "#e8f0fe",
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 24,
+  },
+  noteText: {
+    fontSize: 14,
+    color: "#1a73e8",
+    lineHeight: 20,
+  },
+  error: {
+    color: "#c5221f",
+    fontSize: 15,
+    marginBottom: 12,
+  },
   buttonPrimary: {
     backgroundColor: "#1a73e8",
     padding: 16,
     borderRadius: 12,
     alignItems: "center",
     marginBottom: 12,
+  },
+  btnDisabled: {
+    opacity: 0.6,
   },
   buttonText: {
     color: "#fff",

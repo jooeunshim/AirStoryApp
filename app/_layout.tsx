@@ -1,6 +1,7 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, View } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "./authContext";
 import { BLEProvider } from "./bleContext";
 
@@ -44,17 +45,19 @@ function AuthGate({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   return (
-    <AuthProvider>
-      <BLEProvider>
-        <AuthGate>
-          <Stack>
-            <Stack.Screen name="index" options={{ title: "Home" }} />
-            <Stack.Screen name="history" options={{ title: "Session History" }} />
-            <Stack.Screen name="login" options={{ headerShown: false }} />
-            <Stack.Screen name="onboarding" options={{ title: "Set up your account" }} />
-          </Stack>
-        </AuthGate>
-      </BLEProvider>
-    </AuthProvider>
+    <SafeAreaProvider>
+      <AuthProvider>
+        <BLEProvider>
+          <AuthGate>
+            <Stack>
+              <Stack.Screen name="index" options={{ title: "Home" }} />
+              <Stack.Screen name="history" options={{ title: "Session History" }} />
+              <Stack.Screen name="login" options={{ headerShown: false }} />
+              <Stack.Screen name="onboarding" options={{ title: "Set up your account" }} />
+            </Stack>
+          </AuthGate>
+        </BLEProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
   );
 }
