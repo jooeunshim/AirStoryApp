@@ -1,9 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useEffect, useState } from "react";
-import { Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { convertCsvToImportRows, fetchUploadedSessionCodes, getValidToken, parseCsvLine, uploadMeasurements } from "./airstoryApi";
+
+const UPLOADED_IDS_KEY = "uploaded_session_ids";
 
 interface Session {
   id: string;
@@ -16,10 +20,49 @@ export default function History() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [csvCache, setCsvCache] = useState<Record<string, string>>({});
+  // uploadedIds is persisted to AsyncStorage so green checkmarks survive app restart.
+  // Note: stored locally per device - won't sync across devices.
+  const [uploadingIds, setUploadingIds] = useState<string[]>([]);
+  const [uploadedIds, setUploadedIds] = useState<string[]>([]);
 
   useEffect(() => {
     loadSessions();
+    loadUploadedIds();
+    syncWithBackend();
   }, []);
+
+  const loadUploadedIds = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(UPLOADED_IDS_KEY);
+      if (stored) {
+        const ids = JSON.parse(stored) as string[];
+        setUploadedIds(ids);
+      }
+    } catch (e) {
+      console.log("Failed to load uploaded ids:", e);
+    }
+  };
+
+  const syncWithBackend = async () => {
+    try {
+      const { token, workspaceId } = await getValidToken();
+      const backendSessionCodes = await fetchUploadedSessionCodes(workspaceId, token);
+
+      const stored = await AsyncStorage.getItem(UPLOADED_IDS_KEY);
+      if (!stored) return;
+
+      const localIds: string[] = JSON.parse(stored);
+      const validIds = localIds.filter(id => backendSessionCodes.includes(id));
+
+      if (validIds.length !== localIds.length) {
+        setUploadedIds(validIds);
+        await AsyncStorage.setItem(UPLOADED_IDS_KEY, JSON.stringify(validIds));
+        console.log(`Synced with backend: removed ${localIds.length - validIds.length} stale uploaded ids`);
+      }
+    } catch (e) {
+      console.log("Failed to sync with backend:", e);
+    }
+  };
 
   const loadSessions = async () => {
     try {
@@ -87,6 +130,9 @@ export default function History() {
                 delete next[session.id];
                 return next;
               });
+              const updatedIds = uploadedIds.filter(id => id !== session.id);
+              setUploadedIds(updatedIds);
+              await AsyncStorage.setItem(UPLOADED_IDS_KEY, JSON.stringify(updatedIds));
               loadSessions();
             } catch (e) {
               console.log("Delete error:", e);
@@ -97,15 +143,68 @@ export default function History() {
     );
   };
 
+  const uploadSession = async (session: Session) => {
+    if (uploadingIds.includes(session.id) || uploadedIds.includes(session.id)) {
+      return;
+    }
+
+    try {
+      setUploadingIds(prev => [...prev, session.id]);
+
+      const className = (await AsyncStorage.getItem("className")) || "";
+      const period = (await AsyncStorage.getItem("period")) || "";
+      const group = (await AsyncStorage.getItem("group")) || "";
+
+      if (!period || !group) {
+        Alert.alert("Settings Required", "Please set your group in Settings first.");
+        return;
+      }
+
+      const csvContent = await FileSystem.readAsStringAsync(session.path, { encoding: "utf8" });
+
+      const sessionMetadata = {
+        sessionCode: session.id,
+        sessionName: formatName(session.name).name,
+        school: "PHG01",
+        instructor: className,
+        period,
+        group,
+      };
+      const rows = convertCsvToImportRows(csvContent, sessionMetadata);
+
+      if (rows.length === 0) {
+        Alert.alert("Empty CSV", "No data rows found in this session.");
+        return;
+      }
+
+      const { token, workspaceId } = await getValidToken();
+      await uploadMeasurements(workspaceId, token, rows);
+
+      setUploadedIds(prev => {
+        const newIds = [...prev, session.id];
+        AsyncStorage.setItem(UPLOADED_IDS_KEY, JSON.stringify(newIds)).catch(e =>
+          console.log("Failed to save uploaded ids:", e)
+        );
+        return newIds;
+      });
+      Alert.alert("Success", `Uploaded ${rows.length} measurements successfully!`);
+    } catch (e: any) {
+      console.log("Upload error:", e);
+      Alert.alert("Upload failed", e?.message || "Unknown error occurred.");
+    } finally {
+      setUploadingIds(prev => prev.filter(id => id !== session.id));
+    }
+  };
+
   const filterCsvForPreview = (csvData: string): string => {
-    const previewColumns = ["Timestamp", "PM 2.5", "CO", "Temperature", "Humidity"];
+    const previewColumns = ["Timestamp", "Period", "Group", "PM 2.5", "CO", "Temperature", "Humidity"];
     const lines = csvData.split("\n");
     if (lines.length === 0) return "";
-    const headers = lines[0].split(",").map(h => h.trim());
+    const headers = parseCsvLine(lines[0]).map(h => h.trim());
     const indices = previewColumns.map(col => headers.indexOf(col));
     return lines
       .map(line => {
-        const cells = line.split(",");
+        const cells = parseCsvLine(line);
         return indices.map(i => (i === -1 ? "" : (cells[i] ?? ""))).join(",");
       })
       .join("\n");
@@ -148,11 +247,32 @@ export default function History() {
             <View style={styles.sessionWrapper}>
               <View style={styles.sessionItem}>
                 <TouchableOpacity style={styles.sessionInfo} onPress={() => toggleExpand(item)}>
-                  <Text style={styles.sessionName}>{formatName(item.name).name}</Text>
+                  <View style={styles.sessionHeaderRow}>
+                    <View
+                      style={[
+                        styles.statusDot,
+                        uploadedIds.includes(item.id) ? styles.statusDotUploaded : styles.statusDotPending,
+                      ]}
+                    />
+                    <Text style={styles.sessionName}>{formatName(item.name).name}</Text>
+                  </View>
                   <Text style={styles.sessionTime}>{formatName(item.name).date}</Text>
                   <Text style={styles.exportText}>Tap to view data</Text>
                 </TouchableOpacity>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                  <TouchableOpacity
+                    onPress={() => uploadSession(item)}
+                    style={styles.iconBtn}
+                    disabled={uploadingIds.includes(item.id) || uploadedIds.includes(item.id)}
+                  >
+                    {uploadingIds.includes(item.id) ? (
+                      <ActivityIndicator size="small" color="#1a73e8" />
+                    ) : uploadedIds.includes(item.id) ? (
+                      <Ionicons name="cloud-done-outline" size={22} color="#34a853" />
+                    ) : (
+                      <Ionicons name="cloud-upload-outline" size={22} color="#1a73e8" />
+                    )}
+                  </TouchableOpacity>
                   <TouchableOpacity onPress={() => shareSession(item)} style={styles.iconBtn}>
                     <Ionicons name="share-social-outline" size={22} color="#1a73e8" />
                   </TouchableOpacity>
@@ -177,7 +297,13 @@ export default function History() {
         }}
       />
 
-      <TouchableOpacity style={styles.buttonPrimary} onPress={loadSessions}>
+      <TouchableOpacity
+        style={styles.buttonPrimary}
+        onPress={() => {
+          loadSessions();
+          syncWithBackend();
+        }}
+      >
         <Text style={styles.buttonText}>Refresh</Text>
       </TouchableOpacity>
 
@@ -232,6 +358,22 @@ const styles = StyleSheet.create({
   },
   sessionInfo: {
     flex: 1,
+  },
+  sessionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  statusDotPending: {
+    backgroundColor: "#e74c3c",
+  },
+  statusDotUploaded: {
+    backgroundColor: "#34a853",
   },
   sessionName: {
     fontSize: 18,
