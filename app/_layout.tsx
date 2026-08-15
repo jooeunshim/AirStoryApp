@@ -9,6 +9,28 @@ import { BLEProvider } from "./bleContext";
 // Routes reachable while signed out (the auth flow itself).
 const PUBLIC_ROUTES = ["login", "onboarding"];
 
+/** The only destinations the gate can send you to. Literals, so expo-router's typed routes accept them. */
+type GateRoute = "/login" | "/onboarding" | "/";
+
+/**
+ * Where this auth state belongs, or null if the current route is already correct.
+ *
+ * Computed during render rather than inside the effect so the same answer can gate the render
+ * itself. Deciding only in an effect means children mount for one frame first — which is how Home
+ * flashed before the redirect to Log In.
+ */
+function resolveRedirect(
+  user: unknown,
+  needsOnboarding: boolean,
+  current: string
+): GateRoute | null {
+  const onPublic = PUBLIC_ROUTES.includes(current);
+  if (!user) return onPublic ? null : "/login";
+  if (needsOnboarding) return current === "onboarding" ? null : "/onboarding";
+  // Authenticated with an app account: don't sit on the login/onboarding screens.
+  return onPublic ? "/" : null;
+}
+
 function AuthGate({ children }: { children: React.ReactNode }) {
   const { initializing, user, profile, meError, needsOnboarding, loadingMe, refreshMe } = useAuth();
   const segments = useSegments();
@@ -16,24 +38,17 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   // The index route ("/") has no first segment.
   const current = (segments[0] as string) ?? "index";
 
+  // Auth state is still settling: nothing can be decided yet, and nothing protected may mount.
+  const undecided = initializing || (user != null && loadingMe);
+  const redirectTo = undecided ? null : resolveRedirect(user, needsOnboarding, current);
+
   useEffect(() => {
-    if (initializing) return;
-    if (user && loadingMe) return; // wait for /auth/me before deciding
-    const onPublic = PUBLIC_ROUTES.includes(current);
+    if (redirectTo) router.replace(redirectTo);
+  }, [redirectTo, router]);
 
-    if (!user) {
-      if (!onPublic) router.replace("/login");
-      return;
-    }
-    if (needsOnboarding) {
-      if (current !== "onboarding") router.replace("/onboarding");
-      return;
-    }
-    // Authenticated with an app account: don't sit on the login/onboarding screens.
-    if (onPublic) router.replace("/");
-  }, [initializing, user, needsOnboarding, loadingMe, current, router]);
-
-  if (initializing || (user && loadingMe)) {
+  // Hold the loading state both while auth is unresolved AND while a redirect is pending, so no
+  // screen is ever mounted only to be replaced a frame later.
+  if (undecided || redirectTo) {
     return (
       <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: "#fff" }}>
         <ActivityIndicator size="large" color="#1a73e8" />
