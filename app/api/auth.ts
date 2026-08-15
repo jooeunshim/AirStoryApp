@@ -26,12 +26,17 @@ export async function login(email: string, password: string): Promise<null> {
   return null;
 }
 
-/** Returns the signed-in user's app account: `{ user, memberships, profile }`. */
+/**
+ * Returns the signed-in user's app account: `{ user, memberships }`. Each membership carries its
+ * own `role` and nested `profile`; there is no top-level profile.
+ */
 export async function getMe(): Promise<any> {
   return apiRequest("/auth/me");
 }
 
 export interface UpdateProfileArgs {
+  /** Required by the backend: profiles are per-workspace, so the target must be explicit. */
+  workspaceId: string;
   schoolCode?: string;
   instructor?: string;
   period?: string;
@@ -42,9 +47,11 @@ export interface UpdateProfileArgs {
  * Update the signed-in user's own profile row (school / instructor / period / group) via
  * PATCH /auth/me/profile — the same endpoint the web My Page uses, so changes sync across
  * web and phone for the same account. Partial update: only provided fields change.
+ *
+ * workspaceId is mandatory; the backend 400s without it. Pass the active *class* workspace.
  */
 export async function updateMyProfile(args: UpdateProfileArgs): Promise<any> {
-  const body: Record<string, string> = {};
+  const body: Record<string, string> = { workspaceId: args.workspaceId };
   if (args.schoolCode !== undefined) body.schoolCode = args.schoolCode;
   if (args.instructor !== undefined) body.instructor = args.instructor;
   if (args.period !== undefined) body.period = args.period;

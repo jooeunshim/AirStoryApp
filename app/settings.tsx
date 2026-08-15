@@ -19,7 +19,7 @@ import { manager, useBLE } from "./bleContext";
 export default function Settings() {
   const router = useRouter();
   const { connectedDevice, setConnectedDevice } = useBLE();
-  const { profile, role, refreshMe } = useAuth();
+  const { profile, role, activeWorkspaceId, refreshMe } = useAuth();
   const isTeacher = role === "teacher";
   const insets = useSafeAreaInsets();
 
@@ -45,10 +45,17 @@ export default function Settings() {
 
   const saveProfile = async () => {
     setError("");
+    // Profiles are per-workspace, so there is nothing to save into until the class workspace
+    // is known (a brand-new account in Public only, or an offline first launch).
+    if (!activeWorkspaceId) {
+      setError("No class workspace yet — your teacher needs to add you to a class first.");
+      return;
+    }
     setSaving(true);
     try {
       const period = periodDigits ? `P${periodDigits}` : "";
       await updateMyProfile({
+        workspaceId: activeWorkspaceId,
         schoolCode: school.trim(),
         instructor: instructor.trim(),
         period,

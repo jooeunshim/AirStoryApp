@@ -8,7 +8,27 @@ import { getMe } from "./api/auth";
 // still have the correct school / period / group for stamping session CSVs.
 const PROFILE_CACHE_KEY = "airstory_profile_cache";
 
+/** One entry of /auth/me's `memberships[]`. Each workspace carries its own role and profile. */
+export interface Membership {
+  workspace_id: string;
+  workspace_name: string;
+  kind: "class" | "school" | "public";
+  school_id: string | null;
+  school_name: string;
+  role: "teacher" | "student";
+  profile: {
+    workspace_id: string;
+    school_code: string;
+    instructor: string;
+    period: string;
+    group_code: string;
+    student_code: string;
+  };
+}
+
 export interface Profile {
+  /** The class workspace this profile belongs to; profiles are per-workspace. */
+  workspaceId: string;
   schoolCode: string;
   instructor: string;
   period: string;
@@ -18,19 +38,37 @@ export interface Profile {
   role: "teacher" | "student" | "";
 }
 
+/**
+ * Pick the membership the app operates on: the *class* workspace.
+ *
+ * Every account is also a member of the singleton Public workspace and of a school workspace per
+ * school, but those are read-only aggregates — uploads are rejected there. Order matters: the
+ * Public workspace is seeded before any user's class, so memberships[0] is typically Public with
+ * a hardcoded 'student' role, which would make a teacher read as a student. Always select by kind.
+ *
+ * Multiple class workspaces (a teacher with several classes) are possible; taking the first is a
+ * deterministic placeholder until Phase 5 adds an explicit picker.
+ */
+function pickClassMembership(me: any): Membership | null {
+  const memberships: Membership[] = me?.memberships || [];
+  return memberships.find((m) => m.kind === "class") || null;
+}
+
 /** Flatten the /auth/me payload into the compact shape the app screens consume. */
 function normalizeProfile(me: any): Profile | null {
   if (!me) return null;
-  const p = me.profile || {};
-  const role = (me.memberships?.[0]?.role as Profile["role"]) || "";
+  const membership = pickClassMembership(me);
+  if (!membership) return null;
+  const p = membership.profile || ({} as Membership["profile"]);
   return {
+    workspaceId: membership.workspace_id,
     schoolCode: p.school_code || "",
     instructor: p.instructor || "",
     period: p.period || "",
     groupCode: p.group_code || "",
     studentCode: p.student_code || "",
     fullName: me.user?.full_name || "",
-    role,
+    role: membership.role || "",
   };
 }
 
@@ -41,6 +79,10 @@ interface AuthContextType {
   /** Effective profile: live from /auth/me, or the cached copy when offline. */
   profile: Profile | null;
   role: "teacher" | "student" | "";
+  /** The class workspace all reads/writes target. Survives offline via the profile cache. */
+  activeWorkspaceId: string | null;
+  /** Full class membership from the last successful /auth/me; null when offline. */
+  activeMembership: Membership | null;
   needsOnboarding: boolean;
   loadingMe: boolean;
   refreshMe: () => Promise<void>;
@@ -52,6 +94,8 @@ const AuthContext = createContext<AuthContextType>({
   me: null,
   profile: null,
   role: "",
+  activeWorkspaceId: null,
+  activeMembership: null,
   needsOnboarding: false,
   loadingMe: false,
   refreshMe: async () => {},
@@ -122,12 +166,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, [refreshMe]);
 
+  const activeMembership = pickClassMembership(me);
   const profile = normalizeProfile(me) ?? cachedProfile;
   const role = profile?.role ?? "";
+  // Prefer the live membership; fall back to the cached workspace id so an offline relaunch
+  // still knows which class workspace it belongs to.
+  const activeWorkspaceId = activeMembership?.workspace_id ?? profile?.workspaceId ?? null;
 
   return (
     <AuthContext.Provider
-      value={{ initializing, user, me, profile, role, needsOnboarding, loadingMe, refreshMe }}
+      value={{
+        initializing,
+        user,
+        me,
+        profile,
+        role,
+        activeWorkspaceId,
+        activeMembership,
+        needsOnboarding,
+        loadingMe,
+        refreshMe,
+      }}
     >
       {children}
     </AuthContext.Provider>
