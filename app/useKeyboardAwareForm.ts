@@ -1,4 +1,5 @@
 import { HeaderHeightContext } from "@react-navigation/elements";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Keyboard,
@@ -12,6 +13,21 @@ import {
 
 /** Gap left between the bottom of the focused field and the top of the keyboard. */
 const FOCUS_MARGIN = 28;
+
+/**
+ * Our paddingBottom REPLACES the screen's own content padding (onboarding 28, login 24), so that
+ * much has to be added back before any of the extra counts as new scroll range. Without it the net
+ * gain is keyboardHeight exactly, which is what left the last field flush against the keyboard.
+ * Set to the larger of the two: over-allocating only yields harmless extra headroom, whereas
+ * under-allocating reintroduces the bug.
+ */
+const BASE_CONTENT_PADDING = 28;
+
+/**
+ * Floor for the extra allowance when the safe-area inset reads 0 (some devices/emulators report
+ * no gesture bar), so the last field always keeps some headroom.
+ */
+const MIN_EXTRA_ALLOWANCE = 48;
 
 // TEMPORARY diagnostic logging (see KBDIAG lines in Metro). Strip once verified on device.
 const KBDIAG = true;
@@ -38,6 +54,11 @@ export function useKeyboardAwareForm() {
   // amount. Reading the context directly (rather than useHeaderHeight) returns undefined instead
   // of throwing when there is no header, e.g. the login screen with headerShown: false.
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
+
+  const insets = useSafeAreaInsets();
+  // Headroom beyond the keyboard itself: the gap we want above the focused field, plus the
+  // gesture-bar inset that the reported keyboard height leaves out under edge-to-edge.
+  const extraAllowance = Math.max(insets.bottom + FOCUS_MARGIN, MIN_EXTRA_ALLOWANCE);
 
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   /** Last focused input, so the scroll can be re-issued once the padding exists. */
@@ -94,9 +115,10 @@ export function useKeyboardAwareForm() {
       const h = e.endCoordinates?.height ?? 0;
       diag(
         "keyboardDidShow kbHeight=", h,
-        "| layout h=", layoutHeight.current,
-        "content h=", contentHeight.current,
-        "scrollable(before padding)=", contentHeight.current - layoutHeight.current
+        "| insets.bottom=", insets.bottom,
+        "extraAllowance=", extraAllowance,
+        "=> paddingBottom=", h + BASE_CONTENT_PADDING + extraAllowance,
+        "| expected scrollable≈", h + extraAllowance
       );
       setKeyboardHeight(h);
     });
@@ -109,7 +131,7 @@ export function useKeyboardAwareForm() {
       show.remove();
       hide.remove();
     };
-  }, []);
+  }, [insets.bottom, extraAllowance]);
 
   // Once the padding has been applied and the content re-measured, move the focused field up.
   useEffect(() => {
@@ -131,7 +153,12 @@ export function useKeyboardAwareForm() {
    */
   const keyboardAdjustStyle: ViewStyle | null =
     keyboardHeight > 0
-      ? { justifyContent: "flex-start", paddingBottom: keyboardHeight + FOCUS_MARGIN }
+      ? {
+          justifyContent: "flex-start",
+          // keyboardHeight is measured from the bottom of the window. Under edge-to-edge that
+          // excludes the navigation/gesture bar, so the inset is added on top of the visual gap.
+          paddingBottom: keyboardHeight + BASE_CONTENT_PADDING + extraAllowance,
+        }
       : null;
 
   return {
