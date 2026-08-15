@@ -1,5 +1,4 @@
 import { HeaderHeightContext } from "@react-navigation/elements";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   Keyboard,
@@ -24,10 +23,11 @@ const FOCUS_MARGIN = 28;
 const BASE_CONTENT_PADDING = 28;
 
 /**
- * Floor for the extra allowance when the safe-area inset reads 0 (some devices/emulators report
- * no gesture bar), so the last field always keeps some headroom.
+ * Flat, generous headroom beyond the keyboard. Deliberately not computed from the safe-area inset:
+ * successive attempts to derive an exact figure all came up short, and excess bottom padding is
+ * invisible (it is below the last field, inside a scroll view) whereas being short breaks the form.
  */
-const MIN_EXTRA_ALLOWANCE = 48;
+const EXTRA_ALLOWANCE = 200;
 
 // TEMPORARY diagnostic logging (see KBDIAG lines in Metro). Strip once verified on device.
 const KBDIAG = true;
@@ -55,16 +55,12 @@ export function useKeyboardAwareForm() {
   // of throwing when there is no header, e.g. the login screen with headerShown: false.
   const headerHeight = useContext(HeaderHeightContext) ?? 0;
 
-  const insets = useSafeAreaInsets();
-  // Headroom beyond the keyboard itself: the gap we want above the focused field, plus the
-  // gesture-bar inset that the reported keyboard height leaves out under edge-to-edge.
-  const extraAllowance = Math.max(insets.bottom + FOCUS_MARGIN, MIN_EXTRA_ALLOWANCE);
-
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   /** Last focused input, so the scroll can be re-issued once the padding exists. */
   const focusedNode = useRef<number | null>(null);
+  /** Mirror of keyboardHeight for callbacks that must not capture stale state. */
+  const keyboardOpen = useRef(false);
 
-  // Geometry, kept for the KBDIAG readout.
   const layoutHeight = useRef(0);
   const contentHeight = useRef(0);
 
@@ -72,23 +68,39 @@ export function useKeyboardAwareForm() {
     layoutHeight.current = e.nativeEvent.layout.height;
   }, []);
 
-  const onContentSizeChange = useCallback((_w: number, h: number) => {
-    contentHeight.current = h;
-    diag("content h=", h, "layout h=", layoutHeight.current, "scrollable=", h - layoutHeight.current);
-  }, []);
-
   /** Scroll a node above the keyboard. No-ops harmlessly when there is no scroll range. */
-  const scrollNodeIntoView = useCallback((node: number) => {
+  const scrollNodeIntoView = useCallback((node: number, why: string) => {
     const sv = scrollRef.current;
     if (!sv) return;
+    const maxScroll = contentHeight.current - layoutHeight.current;
     try {
       const responder = (sv as any).getScrollResponder?.call(sv);
       responder?.scrollResponderScrollNativeHandleToKeyboard?.(node, FOCUS_MARGIN, true);
-      diag("scrolled node", node, "scrollable=", contentHeight.current - layoutHeight.current);
+      diag(`scroll [${why}] node=`, node, "maxScroll at call time=", maxScroll);
     } catch (err: any) {
       diag("scroll THREW:", String(err?.message || err));
     }
   }, []);
+
+  /**
+   * Re-issue the scroll only once the content has actually grown.
+   *
+   * This is the ordering that matters: focus fires before keyboardDidShow, and the padding lands a
+   * frame later still. Scrolling on a timer can run before the ScrollView has re-measured, in which
+   * case the responder clamps to the OLD maximum (the pre-padding one) and the field ends up only
+   * partway up — which reads exactly like "the padding is too small".
+   */
+  const onContentSizeChange = useCallback(
+    (_w: number, h: number) => {
+      const grew = h > contentHeight.current;
+      contentHeight.current = h;
+      diag("content h=", h, "layout h=", layoutHeight.current, "scrollable=", h - layoutHeight.current);
+      if (grew && keyboardOpen.current && focusedNode.current != null) {
+        scrollNodeIntoView(focusedNode.current, "after content grew");
+      }
+    },
+    [scrollNodeIntoView]
+  );
 
   const handleFocus = useCallback(
     (e: NativeSyntheticEvent<TargetedEvent>) => {
@@ -102,10 +114,10 @@ export function useKeyboardAwareForm() {
         return;
       }
       focusedNode.current = node;
-      // Focus fires before keyboardDidShow, so at this instant the padding (and therefore the
-      // scroll range) usually does not exist yet. Try anyway for the keyboard-already-open case;
-      // the effect below re-issues it once the keyboard height lands.
-      scrollNodeIntoView(node);
+      // Focus fires before keyboardDidShow, so the scroll range usually does not exist yet. Try
+      // anyway for the keyboard-already-open case (switching fields); onContentSizeChange re-issues
+      // it once the padding has landed.
+      scrollNodeIntoView(node, "on focus");
     },
     [scrollNodeIntoView]
   );
@@ -113,17 +125,17 @@ export function useKeyboardAwareForm() {
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", (e) => {
       const h = e.endCoordinates?.height ?? 0;
+      keyboardOpen.current = true;
       diag(
         "keyboardDidShow kbHeight=", h,
-        "| insets.bottom=", insets.bottom,
-        "extraAllowance=", extraAllowance,
-        "=> paddingBottom=", h + BASE_CONTENT_PADDING + extraAllowance,
-        "| expected scrollable≈", h + extraAllowance
+        "=> paddingBottom=", h + BASE_CONTENT_PADDING + EXTRA_ALLOWANCE,
+        "| expected scrollable≈", h + EXTRA_ALLOWANCE
       );
       setKeyboardHeight(h);
     });
     const hide = Keyboard.addListener("keyboardDidHide", () => {
       diag("keyboardDidHide");
+      keyboardOpen.current = false;
       setKeyboardHeight(0);
       focusedNode.current = null;
     });
@@ -131,14 +143,15 @@ export function useKeyboardAwareForm() {
       show.remove();
       hide.remove();
     };
-  }, [insets.bottom, extraAllowance]);
+  }, []);
 
-  // Once the padding has been applied and the content re-measured, move the focused field up.
+  // Backstop in case onContentSizeChange does not fire (e.g. the padding produced no size change
+  // because the content was already tall enough to scroll).
   useEffect(() => {
     if (keyboardHeight <= 0 || focusedNode.current == null) return;
     const timer = setTimeout(() => {
-      if (focusedNode.current != null) scrollNodeIntoView(focusedNode.current);
-    }, 60);
+      if (focusedNode.current != null) scrollNodeIntoView(focusedNode.current, "backstop timer");
+    }, 250);
     return () => clearTimeout(timer);
   }, [keyboardHeight, scrollNodeIntoView]);
 
@@ -155,9 +168,7 @@ export function useKeyboardAwareForm() {
     keyboardHeight > 0
       ? {
           justifyContent: "flex-start",
-          // keyboardHeight is measured from the bottom of the window. Under edge-to-edge that
-          // excludes the navigation/gesture bar, so the inset is added on top of the visual gap.
-          paddingBottom: keyboardHeight + BASE_CONTENT_PADDING + extraAllowance,
+          paddingBottom: keyboardHeight + BASE_CONTENT_PADDING + EXTRA_ALLOWANCE,
         }
       : null;
 
