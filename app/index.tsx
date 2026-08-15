@@ -10,7 +10,7 @@ export default function Index() {
   const { profile, activeMembership, hasClassWorkspace } = useAuth();
 
   // Profile is the source of truth (synced to the account); cached for offline launches.
-  const school = profile?.schoolCode || "";
+  const school = profile?.schoolName || "";
   const instructor = profile?.instructor || "";
   const period = profile?.period || "";
   const group = profile?.groupCode || "";

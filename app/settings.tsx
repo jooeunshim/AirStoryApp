@@ -37,10 +37,10 @@ export default function Settings() {
   const { structure, loading: loadingStructure, refresh: refreshStructure } =
     useClassStructure(activeWorkspaceId);
 
-  // School / instructor are class-level identity and stay teacher-only. Period and group are the
-  // user's own placement: the backend's PATCH /auth/me/profile is requireAuth with no role check,
-  // and a student's group genuinely changes week to week, so both roles pick their own.
-  const [school, setSchool] = useState("");
+  // Instructor is class-level identity and stays teacher-only. Period and group are the user's
+  // own placement: the backend's PATCH /auth/me/profile is requireAuth with no role check, and a
+  // student's group genuinely changes week to week, so both roles pick their own. School is not
+  // here at all — it belongs to the workspace and is set on the web.
   const [instructor, setInstructor] = useState("");
   const [period, setPeriod] = useState("");
   const [group, setGroup] = useState("");
@@ -51,11 +51,10 @@ export default function Settings() {
   // Seed the form from the active workspace's profile. normalizePeriod/normalizeGroup only matter
   // for values written before pickers existed ("1" -> "P1"); picker output is already correct.
   useEffect(() => {
-    setSchool(profile?.schoolCode || "");
     setInstructor(profile?.instructor || "");
     setPeriod(normalizePeriod(profile?.period));
     setGroup(normalizeGroup(profile?.groupCode));
-  }, [profile?.schoolCode, profile?.instructor, profile?.period, profile?.groupCode]);
+  }, [profile?.instructor, profile?.period, profile?.groupCode]);
 
   // Free-text names: strip only CSV-breaking characters (matches the web sanitizer).
   const sanitizeName = (t: string) => t.replace(/[",\n\r]/g, "").substring(0, 60);
@@ -87,9 +86,10 @@ export default function Settings() {
     }
     setSaving(true);
     try {
+      // schoolCode is deliberately omitted: the field is optional, and the backend preserves the
+      // existing value when it is absent. The app no longer owns that column.
       await updateMyProfile({
         workspaceId: activeWorkspaceId,
-        schoolCode: school.trim(),
         instructor: instructor.trim(),
         period,
         groupCode: group,
@@ -193,18 +193,20 @@ export default function Settings() {
             readOnly("Class workspace", profile?.workspaceName || "")
           )}
 
+          {/* School is a property of the class, not of the member: it comes from the schools
+              directory via the teacher's Manage Classes setting on the web. Read-only for both
+              roles — an editable field here would write user_profiles.school_code, which nothing
+              displays or uploads. */}
+          {readOnly("School", profile?.schoolName || "")}
+          {!profile?.schoolName ? (
+            <Text style={styles.hint}>
+              Your teacher has not set this class&apos;s school yet. Data cannot be uploaded until
+              they do.
+            </Text>
+          ) : null}
+
           {isTeacher ? (
             <>
-              <Text style={styles.label}>School</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Lincoln High School"
-                value={school}
-                onChangeText={(t) => setSchool(sanitizeName(t))}
-                maxLength={60}
-                editable={!saving}
-              />
-
               <Text style={styles.label}>Class (Instructor)</Text>
               <TextInput
                 style={styles.input}
@@ -216,10 +218,7 @@ export default function Settings() {
               />
             </>
           ) : (
-            <>
-              {readOnly("School", profile?.schoolCode || "")}
-              {readOnly("Class (Instructor)", profile?.instructor || "")}
-            </>
+            readOnly("Class (Instructor)", profile?.instructor || "")
           )}
 
           {/* Item 4: options come from the workspace's class structure, not free text. */}

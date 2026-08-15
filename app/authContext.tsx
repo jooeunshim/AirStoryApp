@@ -43,7 +43,20 @@ export interface Profile {
   /** The class workspace this profile belongs to; profiles are per-workspace. */
   workspaceId: string;
   workspaceName: string;
-  schoolCode: string;
+  /**
+   * The class's school, resolved by the backend from workspaces.school_id -> schools.name. This
+   * is THE school value: what gets uploaded, written to the CSV, and displayed.
+   *
+   * Empty when the teacher has not set a school on the class. Not to be confused with
+   * memberSchoolCode below — the per-member column is always "" for an invited student, because
+   * invite-accept inserts an empty string and nothing ever backfills it.
+   */
+  schoolName: string;
+  /**
+   * The per-member user_profiles.school_code. Kept readable for reference only; it is not what
+   * the app uploads or renders, and is typically "".
+   */
+  memberSchoolCode: string;
   instructor: string;
   period: string;
   groupCode: string;
@@ -94,7 +107,9 @@ function toProfile(me: any, membership: Membership): Profile {
   return {
     workspaceId: membership.workspace_id,
     workspaceName: membership.workspace_name || "",
-    schoolCode: p.school_code || "",
+    // Workspace-level, from the schools directory — the teacher's Manage Classes setting.
+    schoolName: membership.school_name || "",
+    memberSchoolCode: p.school_code || "",
     instructor: p.instructor || "",
     period: p.period || "",
     groupCode: p.group_code || "",

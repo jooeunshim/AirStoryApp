@@ -30,7 +30,9 @@ export default function Session() {
 
   // Account-synced profile (cached offline) stamps the session metadata into each CSV row.
   const className = profile?.instructor || "";
-  const school = profile?.schoolCode || "";
+  // The class's school name — the same value the upload sends, so the exported CSV and the
+  // stored session agree instead of the upload silently overriding a different string.
+  const school = profile?.schoolName || "";
   const period = profile?.period || "";
   const group = profile?.groupCode || "";
 

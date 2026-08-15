@@ -209,6 +209,17 @@ export default function History() {
       return;
     }
 
+    // The school is part of the session key and cannot be corrected after upload — there is no
+    // endpoint that rewrites it. Uploading an empty string would permanently orphan this session
+    // from the class's school in the web dashboard, so refuse rather than record something wrong.
+    if (!profile?.schoolName) {
+      Alert.alert(
+        "School not set",
+        "Your teacher has not chosen this class's school yet. Ask them to set it in Manage Classes on the AirStory website, then pull down to refresh and try again."
+      );
+      return;
+    }
+
     const period = normalizePeriod(profile?.period);
     const group = normalizeGroup(profile?.groupCode);
 
@@ -235,6 +246,9 @@ export default function History() {
    */
   const performUpload = async (session: Session, period: string, group: string) => {
     if (!activeWorkspaceId) return;
+    // Re-checked here as well as in beginUpload: this is the last point before the value is
+    // written into an unfixable session key.
+    if (!profile?.schoolName) return;
     try {
       setUploadingIds(prev => [...prev, session.id]);
 
@@ -243,7 +257,10 @@ export default function History() {
       const sessionMetadata = {
         sessionCode: session.id,
         sessionName: formatName(session.name).name,
-        school: "PHG01",
+        // The class's real school name from the schools directory. sessions.school_code is both
+        // the session-key component and the literal string the web Raw Data view renders, so the
+        // human-readable name is the only sensible value to send.
+        school: profile.schoolName,
         instructor: profile?.instructor || "",
         period,
         group,
