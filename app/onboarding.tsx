@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,6 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { useKeyboardAwareForm } from "./useKeyboardAwareForm";
 import {
   extractInviteToken,
   getInvitePreview,
@@ -59,6 +59,8 @@ export default function Onboarding() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+
+  const { scrollRef, handleFocus, behavior, keyboardVerticalOffset } = useKeyboardAwareForm();
 
   const inviteToken = extractInviteToken(inviteInput);
 
@@ -201,9 +203,15 @@ export default function Onboarding() {
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={behavior}
+      keyboardVerticalOffset={keyboardVerticalOffset}
     >
-      <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+      >
         <Text style={styles.title}>{isStudent ? "Join your class" : "Create your class"}</Text>
         <Text style={styles.body}>
           {isStudent
@@ -220,6 +228,7 @@ export default function Onboarding() {
               placeholderTextColor="#9aa0a6"
               value={inviteInput}
               onChangeText={setInviteInput}
+              onFocus={handleFocus}
               autoCapitalize="none"
               autoCorrect={false}
               multiline
@@ -261,6 +270,7 @@ export default function Onboarding() {
               placeholderTextColor="#9aa0a6"
               value={workspaceName}
               onChangeText={setWorkspaceName}
+              onFocus={handleFocus}
               maxLength={80}
               editable={!submitting}
             />
@@ -274,6 +284,7 @@ export default function Onboarding() {
           placeholderTextColor="#9aa0a6"
           value={fullName}
           onChangeText={setFullName}
+          onFocus={handleFocus}
           maxLength={80}
           editable={!submitting}
         />
@@ -291,6 +302,7 @@ export default function Onboarding() {
               placeholderTextColor="#9aa0a6"
               value={email}
               onChangeText={setEmail}
+              onFocus={handleFocus}
               autoCapitalize="none"
               keyboardType="email-address"
               autoComplete="email"
@@ -305,6 +317,7 @@ export default function Onboarding() {
                 placeholderTextColor="#9aa0a6"
                 value={password}
                 onChangeText={setPassword}
+                onFocus={handleFocus}
                 secureTextEntry={!showPassword}
                 editable={!submitting}
               />

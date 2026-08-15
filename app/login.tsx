@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -13,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { login } from "./api/auth";
+import { useKeyboardAwareForm } from "./useKeyboardAwareForm";
 
 /** Turn raw Firebase auth error codes into friendly copy. */
 function friendlyAuthError(e: any): string {
@@ -34,6 +34,8 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+
+  const { scrollRef, handleFocus, behavior, keyboardVerticalOffset } = useKeyboardAwareForm();
 
   const handleLogin = async () => {
     if (busy) return;
@@ -57,11 +59,14 @@ export default function Login() {
   return (
     <KeyboardAvoidingView
       style={styles.flex}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
+      behavior={behavior}
+      keyboardVerticalOffset={keyboardVerticalOffset}
     >
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
       >
         <View style={styles.card}>
           {/* Icon */}
@@ -81,6 +86,7 @@ export default function Login() {
             placeholderTextColor="#9aa0a6"
             value={email}
             onChangeText={setEmail}
+            onFocus={handleFocus}
             autoCapitalize="none"
             keyboardType="email-address"
             autoComplete="email"
@@ -96,6 +102,7 @@ export default function Login() {
               placeholderTextColor="#9aa0a6"
               value={password}
               onChangeText={setPassword}
+              onFocus={handleFocus}
               secureTextEntry={!showPassword}
               autoComplete="password"
               editable={!busy}
