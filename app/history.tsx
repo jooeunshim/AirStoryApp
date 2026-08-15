@@ -4,11 +4,16 @@ import * as FileSystem from "expo-file-system/legacy";
 import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useEffect, useState } from "react";
-import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { ActivityIndicator, Alert, FlatList, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { convertCsvToImportRows, fetchUploadedSessionCodes, parseCsvLine, uploadMeasurements } from "./airstoryApi";
+import { updateMyProfile } from "./api/auth";
 import { useAuth } from "./authContext";
+import { ChipPicker } from "./components/ChipPicker";
+import { groupsFor, normalizeGroup, normalizePeriod, useClassStructure } from "./useClassStructure";
 
 const UPLOADED_IDS_KEY = "uploaded_session_ids";
+/** Placement confirmed at the last successful upload, per workspace: Record<wsId, "P1|G2">. */
+const LAST_PLACEMENT_KEY = "airstory_last_upload_placement";
 
 interface Session {
   id: string;
@@ -18,7 +23,8 @@ interface Session {
 
 export default function History() {
   const router = useRouter();
-  const { profile, activeWorkspaceId } = useAuth();
+  const { profile, activeWorkspaceId, activeMembership, cachedWorkspaceIds, refreshMe } = useAuth();
+  const { structure } = useClassStructure(activeWorkspaceId);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [csvCache, setCsvCache] = useState<Record<string, string>>({});
@@ -27,16 +33,26 @@ export default function History() {
   const [uploadingIds, setUploadingIds] = useState<string[]>([]);
   const [uploadedIds, setUploadedIds] = useState<string[]>([]);
 
+  // Upload confirmation (item 5): the session awaiting confirmation, plus the placement being
+  // confirmed for it.
+  const [pendingSession, setPendingSession] = useState<Session | null>(null);
+  const [confirmPeriod, setConfirmPeriod] = useState("");
+  const [confirmGroup, setConfirmGroup] = useState("");
+
+  const activeClassName = activeMembership?.workspace_name || profile?.workspaceName || "";
+
   useEffect(() => {
     loadSessions();
     loadUploadedIds();
   }, []);
 
-  // The class workspace resolves only after /auth/me returns, so sync once it is known
-  // (and again if it changes).
+  // Reconcile against every workspace with cached data, not just the active one: a session
+  // uploaded to another class must not lose its checkmark when that class isn't selected.
   useEffect(() => {
-    if (activeWorkspaceId) syncWithBackend(activeWorkspaceId);
-  }, [activeWorkspaceId]);
+    const ids = Array.from(new Set([...cachedWorkspaceIds, activeWorkspaceId].filter(Boolean)));
+    if (ids.length) syncWithBackend(ids as string[]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeWorkspaceId, cachedWorkspaceIds.join(",")]);
 
   const loadUploadedIds = async () => {
     try {
@@ -50,15 +66,24 @@ export default function History() {
     }
   };
 
-  const syncWithBackend = async (workspaceId: string) => {
+  const syncWithBackend = async (workspaceIds: string[]) => {
     try {
-      const backendSessionCodes = await fetchUploadedSessionCodes(workspaceId);
-
       const stored = await AsyncStorage.getItem(UPLOADED_IDS_KEY);
       if (!stored) return;
 
+      // Union across workspaces. A session code found in ANY of them is still uploaded; only a
+      // code absent everywhere was genuinely deleted. Querying one workspace in isolation would
+      // wrongly clear checkmarks for data that lives in another class.
+      const results = await Promise.all(
+        workspaceIds.map((id) => fetchUploadedSessionCodes(id).catch(() => null))
+      );
+      // A failed lookup (offline, permissions) yields null — treat the whole pass as inconclusive
+      // rather than deleting checkmarks on incomplete information.
+      if (results.some((r) => r === null)) return;
+
+      const known = new Set(results.flat() as string[]);
       const localIds: string[] = JSON.parse(stored);
-      const validIds = localIds.filter(id => backendSessionCodes.includes(id));
+      const validIds = localIds.filter((id) => known.has(id));
 
       if (validIds.length !== localIds.length) {
         setUploadedIds(validIds);
@@ -149,28 +174,69 @@ export default function History() {
     );
   };
 
-  const uploadSession = async (session: Session) => {
-    if (uploadingIds.includes(session.id) || uploadedIds.includes(session.id)) {
+  const readLastPlacement = async (workspaceId: string): Promise<string | null> => {
+    try {
+      const raw = await AsyncStorage.getItem(LAST_PLACEMENT_KEY);
+      if (!raw) return null;
+      return (JSON.parse(raw) as Record<string, string>)[workspaceId] ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const writeLastPlacement = async (workspaceId: string, key: string) => {
+    try {
+      const raw = await AsyncStorage.getItem(LAST_PLACEMENT_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, string>) : {};
+      map[workspaceId] = key;
+      await AsyncStorage.setItem(LAST_PLACEMENT_KEY, JSON.stringify(map));
+    } catch {
+      // Losing this only means the next upload asks for confirmation again — harmless.
+    }
+  };
+
+  /**
+   * Entry point for the Upload button. Decides whether the placement needs confirming before the
+   * upload commits: always on the first upload to a workspace, and whenever period/group differ
+   * from the last confirmed pair. Unchanged placement uploads straight through so a student
+   * uploading several sessions in a row isn't prompted every time.
+   */
+  const beginUpload = async (session: Session) => {
+    if (uploadingIds.includes(session.id) || uploadedIds.includes(session.id)) return;
+
+    if (!activeWorkspaceId) {
+      Alert.alert("No class workspace", "You are not in a class yet, so there is nowhere to upload.");
       return;
     }
 
+    const period = normalizePeriod(profile?.period);
+    const group = normalizeGroup(profile?.groupCode);
+
+    if (!period || !group) {
+      Alert.alert("Set your period and group", "Choose your period and group in Settings first.");
+      return;
+    }
+
+    const last = await readLastPlacement(activeWorkspaceId);
+    if (last === `${period}|${group}`) {
+      await performUpload(session, period, group);
+      return;
+    }
+
+    setConfirmPeriod(period);
+    setConfirmGroup(group);
+    setPendingSession(session);
+  };
+
+  /**
+   * Commit the upload with an explicit placement. Period/group are forced onto every row, so what
+   * is confirmed here is exactly what lands — and it cannot be corrected afterwards, since no
+   * backend endpoint rewrites period/group on an existing session.
+   */
+  const performUpload = async (session: Session, period: string, group: string) => {
+    if (!activeWorkspaceId) return;
     try {
       setUploadingIds(prev => [...prev, session.id]);
-
-      if (!activeWorkspaceId) {
-        Alert.alert("No class workspace", "You are not in a class yet, so there is nowhere to upload.");
-        return;
-      }
-
-      // Class details come from the account profile (synced via /auth/me), not local storage.
-      const className = profile?.instructor || "";
-      const period = profile?.period || "";
-      const group = profile?.groupCode || "";
-
-      if (!period || !group) {
-        Alert.alert("Settings Required", "Please set your group in Settings first.");
-        return;
-      }
 
       const csvContent = await FileSystem.readAsStringAsync(session.path, { encoding: "utf8" });
 
@@ -178,7 +244,7 @@ export default function History() {
         sessionCode: session.id,
         sessionName: formatName(session.name).name,
         school: "PHG01",
-        instructor: className,
+        instructor: profile?.instructor || "",
         period,
         group,
       };
@@ -190,6 +256,15 @@ export default function History() {
       }
 
       await uploadMeasurements(activeWorkspaceId, rows);
+      await writeLastPlacement(activeWorkspaceId, `${period}|${group}`);
+
+      // If the confirmed placement differs from the stored profile, persist it so later sessions
+      // are stamped correctly at collection time. Best-effort: the upload already succeeded.
+      if (period !== normalizePeriod(profile?.period) || group !== normalizeGroup(profile?.groupCode)) {
+        updateMyProfile({ workspaceId: activeWorkspaceId, period, groupCode: group })
+          .then(() => refreshMe())
+          .catch(() => {});
+      }
 
       setUploadedIds(prev => {
         const newIds = [...prev, session.id];
@@ -205,6 +280,13 @@ export default function History() {
     } finally {
       setUploadingIds(prev => prev.filter(id => id !== session.id));
     }
+  };
+
+  const confirmAndUpload = async () => {
+    const session = pendingSession;
+    if (!session) return;
+    setPendingSession(null);
+    await performUpload(session, confirmPeriod, confirmGroup);
   };
 
   const filterCsvForPreview = (csvData: string): string => {
@@ -272,7 +354,7 @@ export default function History() {
                 </TouchableOpacity>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                   <TouchableOpacity
-                    onPress={() => uploadSession(item)}
+                    onPress={() => beginUpload(item)}
                     style={styles.iconBtn}
                     disabled={uploadingIds.includes(item.id) || uploadedIds.includes(item.id)}
                   >
@@ -312,7 +394,8 @@ export default function History() {
         style={styles.buttonPrimary}
         onPress={() => {
           loadSessions();
-          if (activeWorkspaceId) syncWithBackend(activeWorkspaceId);
+          const ids = Array.from(new Set([...cachedWorkspaceIds, activeWorkspaceId].filter(Boolean)));
+          if (ids.length) syncWithBackend(ids as string[]);
         }}
       >
         <Text style={styles.buttonText}>Refresh</Text>
@@ -321,6 +404,64 @@ export default function History() {
       <TouchableOpacity style={styles.buttonHome} onPress={() => router.replace("/")}>
         <Text style={styles.buttonHomeText}>Go to Home</Text>
       </TouchableOpacity>
+
+      {/* Item 5: last chance to fix the placement — nothing can change it after upload. */}
+      <Modal
+        visible={pendingSession !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPendingSession(null)}
+      >
+        <View style={styles.modalBackdrop}>
+          <ScrollView contentContainerStyle={styles.modalScroll}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Confirm upload</Text>
+              <Text style={styles.modalBody}>
+                This data will be attached to the period and group below. It cannot be changed after
+                uploading.
+              </Text>
+
+              {/* Item 3: which class this lands in, display only. */}
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Class</Text>
+                <Text style={styles.modalRowValue}>{activeClassName || "—"}</Text>
+              </View>
+              <View style={styles.modalRow}>
+                <Text style={styles.modalRowLabel}>Session</Text>
+                <Text style={styles.modalRowValue} numberOfLines={1}>
+                  {pendingSession ? formatName(pendingSession.name).name : ""}
+                </Text>
+              </View>
+
+              <View style={styles.modalPickers}>
+                <ChipPicker
+                  label="Period"
+                  options={structure?.periods ?? []}
+                  value={confirmPeriod}
+                  onChange={setConfirmPeriod}
+                />
+                <ChipPicker
+                  label="Group"
+                  options={groupsFor(structure, confirmPeriod || structure?.periods[0] || "")}
+                  value={confirmGroup}
+                  onChange={setConfirmGroup}
+                />
+              </View>
+
+              <TouchableOpacity
+                style={[styles.buttonPrimary, (!confirmPeriod || !confirmGroup) && styles.btnDisabled]}
+                onPress={confirmAndUpload}
+                disabled={!confirmPeriod || !confirmGroup}
+              >
+                <Text style={styles.buttonText}>Upload to {confirmGroup || "…"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setPendingSession(null)}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -437,4 +578,24 @@ const styles = StyleSheet.create({
     fontSize: 19,
     fontWeight: "600",
   },
+  btnDisabled: { opacity: 0.5 },
+  modalBackdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
+  modalScroll: { flexGrow: 1, justifyContent: "center", padding: 20 },
+  modalCard: { backgroundColor: "#fff", borderRadius: 20, padding: 22 },
+  modalTitle: { fontSize: 22, fontWeight: "800", color: "#202124", marginBottom: 8 },
+  modalBody: { fontSize: 15, color: "#5f6368", lineHeight: 21, marginBottom: 18 },
+  modalRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1f3f4",
+  },
+  modalRowLabel: { fontSize: 15, color: "#5f6368" },
+  modalRowValue: { fontSize: 15, fontWeight: "600", color: "#202124", flexShrink: 1 },
+  modalPickers: { marginTop: 18 },
+  modalCancel: { paddingVertical: 14, alignItems: "center" },
+  modalCancelText: { color: "#5f6368", fontSize: 16, fontWeight: "600" },
 });

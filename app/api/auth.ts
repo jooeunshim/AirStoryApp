@@ -28,10 +28,33 @@ export async function login(email: string, password: string): Promise<null> {
 
 /**
  * Returns the signed-in user's app account: `{ user, memberships }`. Each membership carries its
- * own `role` and nested `profile`; there is no top-level profile.
+ * own `role` and nested `profile`. There IS a top-level `profile`, but it is the global account
+ * profile (display_name / title / bio) — never the class placement. Read placement from
+ * `memberships[].profile`.
  */
 export async function getMe(): Promise<any> {
   return apiRequest("/auth/me");
+}
+
+/**
+ * A class workspace's period/group layout. The backend stores two integers (1–12 each) and
+ * generates the labels, so `periods` is ["P1".."Pn"] and every period maps to the same
+ * ["G1".."Gm"] list — period and group are independent choices.
+ */
+export interface ClassStructure {
+  periods: string[];
+  groupsByPeriod: Record<string, string[]>;
+  periodCount: number;
+  groupCount: number;
+}
+
+/**
+ * Fetch a workspace's class structure. Students as well as teachers may call this. A workspace
+ * with no stored row still returns a valid default (1 period, 4 groups) rather than 404, so a
+ * successful call always yields usable options.
+ */
+export async function getClassStructure(workspaceId: string): Promise<ClassStructure> {
+  return apiRequest(`/auth/workspaces/${workspaceId}/class-structure`);
 }
 
 export interface UpdateProfileArgs {

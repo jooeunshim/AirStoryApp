@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,33 +16,66 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { updateMyProfile } from "./api/auth";
 import { useAuth } from "./authContext";
 import { manager, useBLE } from "./bleContext";
+import { ChipPicker } from "./components/ChipPicker";
+import { groupsFor, normalizeGroup, normalizePeriod, useClassStructure } from "./useClassStructure";
 
 export default function Settings() {
   const router = useRouter();
   const { connectedDevice, setConnectedDevice } = useBLE();
-  const { profile, role, activeWorkspaceId, refreshMe } = useAuth();
+  const {
+    profile,
+    role,
+    classMemberships,
+    hasClassWorkspace,
+    activeWorkspaceId,
+    setActiveWorkspace,
+    refreshMe,
+  } = useAuth();
   const isTeacher = role === "teacher";
   const insets = useSafeAreaInsets();
 
-  // Editable copies (teacher only). Period is synced in the web's "P#" format; we edit just the digits.
+  const { structure, loading: loadingStructure, refresh: refreshStructure } =
+    useClassStructure(activeWorkspaceId);
+
+  // School / instructor are class-level identity and stay teacher-only. Period and group are the
+  // user's own placement: the backend's PATCH /auth/me/profile is requireAuth with no role check,
+  // and a student's group genuinely changes week to week, so both roles pick their own.
   const [school, setSchool] = useState("");
   const [instructor, setInstructor] = useState("");
-  const [periodDigits, setPeriodDigits] = useState("");
+  const [period, setPeriod] = useState("");
   const [group, setGroup] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Seed the form from the account profile whenever it changes (login, refresh, save).
+  // Seed the form from the active workspace's profile. normalizePeriod/normalizeGroup only matter
+  // for values written before pickers existed ("1" -> "P1"); picker output is already correct.
   useEffect(() => {
     setSchool(profile?.schoolCode || "");
     setInstructor(profile?.instructor || "");
-    setPeriodDigits((profile?.period || "").replace(/^[Pp]/, ""));
-    setGroup(profile?.groupCode || "");
+    setPeriod(normalizePeriod(profile?.period));
+    setGroup(normalizeGroup(profile?.groupCode));
   }, [profile?.schoolCode, profile?.instructor, profile?.period, profile?.groupCode]);
 
   // Free-text names: strip only CSV-breaking characters (matches the web sanitizer).
   const sanitizeName = (t: string) => t.replace(/[",\n\r]/g, "").substring(0, 60);
-  const sanitizeGroup = (t: string) => t.replace(/[^a-zA-Z0-9가-힣]/g, "").substring(0, 16);
+
+  const onPullToRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshMe(), refreshStructure()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  const switchWorkspace = async (workspaceId: string) => {
+    if (workspaceId === activeWorkspaceId) return;
+    setError("");
+    // The structure hook re-fetches on workspaceId change, and the seeding effect above re-runs
+    // when the new workspace's profile arrives.
+    await setActiveWorkspace(workspaceId);
+  };
 
   const saveProfile = async () => {
     setError("");
@@ -53,13 +87,12 @@ export default function Settings() {
     }
     setSaving(true);
     try {
-      const period = periodDigits ? `P${periodDigits}` : "";
       await updateMyProfile({
         workspaceId: activeWorkspaceId,
         schoolCode: school.trim(),
         instructor: instructor.trim(),
         period,
-        groupCode: group.trim(),
+        groupCode: group,
       });
       // Pull the saved values back and refresh the offline cache, then return home.
       await refreshMe();
@@ -107,58 +140,115 @@ export default function Settings() {
     <ScrollView
       style={styles.container}
       contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 24 }]}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onPullToRefresh} />}
     >
       <Text style={styles.title}>Profile</Text>
       <Text style={styles.subtitle}>
-        {isTeacher
+        {hasClassWorkspace
           ? "Your class details, synced to your account."
-          : "Set by your teacher, synced to your account."}
+          : "You are not in a class yet."}
       </Text>
 
       {readOnly("Name", profile?.fullName || "")}
 
-      {isTeacher ? (
+      {!hasClassWorkspace ? (
+        // Only in the Public/school aggregates: nothing here is writable, and the backend rejects
+        // uploads into those workspaces. Say so rather than showing a form that cannot save.
+        <View style={styles.emptyBox}>
+          <Text style={styles.emptyTitle}>No class yet</Text>
+          <Text style={styles.emptyText}>
+            Your teacher needs to invite you to a class before you can set a period and group or
+            upload data. Once you have joined, pull down to refresh.
+          </Text>
+        </View>
+      ) : (
         <>
-          <Text style={styles.label}>School</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Lincoln High School"
-            value={school}
-            onChangeText={(t) => setSchool(sanitizeName(t))}
-            maxLength={60}
-            editable={!saving}
-          />
+          {/* Item 2: only meaningful with more than one class. */}
+          {classMemberships.length > 1 ? (
+            <View style={styles.section}>
+              <Text style={styles.label}>Class workspace</Text>
+              {classMemberships.map((m) => {
+                const selected = m.workspace_id === activeWorkspaceId;
+                return (
+                  <TouchableOpacity
+                    key={m.workspace_id}
+                    style={[styles.wsRow, selected && styles.wsRowSelected]}
+                    onPress={() => switchWorkspace(m.workspace_id)}
+                    disabled={saving}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                  >
+                    <View style={styles.wsTextWrap}>
+                      <Text style={[styles.wsName, selected && styles.wsNameSelected]}>
+                        {m.workspace_name || "Untitled class"}
+                      </Text>
+                      {m.school_name ? <Text style={styles.wsSchool}>{m.school_name}</Text> : null}
+                    </View>
+                    {selected ? <Text style={styles.wsCheck}>✓</Text> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          ) : (
+            readOnly("Class workspace", profile?.workspaceName || "")
+          )}
 
-          <Text style={styles.label}>Class (Instructor)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Mr. Smith"
-            value={instructor}
-            onChangeText={(t) => setInstructor(sanitizeName(t))}
-            maxLength={60}
-            editable={!saving}
-          />
+          {isTeacher ? (
+            <>
+              <Text style={styles.label}>School</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Lincoln High School"
+                value={school}
+                onChangeText={(t) => setSchool(sanitizeName(t))}
+                maxLength={60}
+                editable={!saving}
+              />
 
-          <Text style={styles.label}>Period</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. 1"
-            value={periodDigits}
-            onChangeText={(t) => setPeriodDigits(t.replace(/[^0-9]/g, "").substring(0, 2))}
-            keyboardType="numeric"
-            maxLength={2}
-            editable={!saving}
-          />
+              <Text style={styles.label}>Class (Instructor)</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Mr. Smith"
+                value={instructor}
+                onChangeText={(t) => setInstructor(sanitizeName(t))}
+                maxLength={60}
+                editable={!saving}
+              />
+            </>
+          ) : (
+            <>
+              {readOnly("School", profile?.schoolCode || "")}
+              {readOnly("Class (Instructor)", profile?.instructor || "")}
+            </>
+          )}
 
-          <Text style={styles.label}>Group</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. G1"
+          {/* Item 4: options come from the workspace's class structure, not free text. */}
+          <ChipPicker
+            label="Period"
+            options={structure?.periods ?? []}
+            value={period}
+            onChange={setPeriod}
+            disabled={saving}
+          />
+          <ChipPicker
+            label="Group"
+            options={groupsFor(structure, period || structure?.periods[0] || "")}
             value={group}
-            onChangeText={(t) => setGroup(sanitizeGroup(t))}
-            maxLength={16}
-            editable={!saving}
+            onChange={setGroup}
+            disabled={saving}
           />
+          {loadingStructure ? (
+            <Text style={styles.hint}>Checking the latest class options…</Text>
+          ) : null}
+
+          {!isTeacher ? (
+            <View style={styles.noteBox}>
+              <Text style={styles.noteText}>
+                Your school and class name are set by your teacher. Pick the period and group you
+                are working in — this is attached to every upload and cannot be changed afterwards.
+              </Text>
+            </View>
+          ) : null}
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -169,19 +259,6 @@ export default function Settings() {
           >
             {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Save</Text>}
           </TouchableOpacity>
-        </>
-      ) : (
-        <>
-          {readOnly("School", profile?.schoolCode || "")}
-          {readOnly("Class (Instructor)", profile?.instructor || "")}
-          {readOnly("Period", profile?.period || "")}
-          {readOnly("Group", profile?.groupCode || "")}
-          <View style={styles.noteBox}>
-            <Text style={styles.noteText}>
-              Your school, period, and group are assigned by your teacher. Ask your teacher to update
-              them if anything looks wrong.
-            </Text>
-          </View>
         </>
       )}
 
@@ -248,6 +325,32 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 24,
   },
+  section: { marginBottom: 20 },
+  hint: { fontSize: 14, color: "#9aa0a6", marginBottom: 16 },
+  wsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#eceff4",
+    backgroundColor: "#f5f7fb",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+  },
+  wsRowSelected: { borderColor: "#1a73e8", backgroundColor: "#e8f0fe" },
+  wsTextWrap: { flex: 1 },
+  wsName: { fontSize: 17, fontWeight: "600", color: "#333" },
+  wsNameSelected: { color: "#1a73e8" },
+  wsSchool: { fontSize: 14, color: "#5f6368", marginTop: 2 },
+  wsCheck: { fontSize: 20, color: "#1a73e8", fontWeight: "700" },
+  emptyBox: {
+    backgroundColor: "#fef7e0",
+    borderRadius: 12,
+    padding: 18,
+    marginBottom: 24,
+  },
+  emptyTitle: { fontSize: 17, fontWeight: "700", color: "#8a6d1f", marginBottom: 6 },
+  emptyText: { fontSize: 15, color: "#8a6d1f", lineHeight: 21 },
   noteText: {
     fontSize: 14,
     color: "#1a73e8",

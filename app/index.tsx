@@ -7,8 +7,7 @@ import { useBLE } from "./bleContext";
 export default function Index() {
   const router = useRouter();
   const { connectedDevice } = useBLE();
-  const { profile, role } = useAuth();
-  const isTeacher = role === "teacher";
+  const { profile, activeMembership, hasClassWorkspace } = useAuth();
 
   // Profile is the source of truth (synced to the account); cached for offline launches.
   const school = profile?.schoolCode || "";
@@ -16,11 +15,14 @@ export default function Index() {
   const period = profile?.period || "";
   const group = profile?.groupCode || "";
   const groupSet = Boolean(group);
+  // Item 3: which class is active, read-only. Falls back to the cached name when offline.
+  const className = activeMembership?.workspace_name || profile?.workspaceName || "";
 
   return (
     <View style={styles.container}>
       <Text style={styles.title}>AirStory</Text>
       <Text style={styles.subtitle}>TAMGU Lab</Text>
+      {className ? <Text style={styles.className}>{className}</Text> : null}
       {school ? <Text style={styles.school}>{school}</Text> : null}
       {groupSet && period ? (
         <Text style={styles.groupInfo}>
@@ -28,29 +30,26 @@ export default function Index() {
         </Text>
       ) : null}
 
-      {!groupSet &&
-        (isTeacher ? (
-          <View style={styles.warningBadge}>
-            <Text style={styles.warningTitle}>Group not set</Text>
-            <Text style={styles.warningText}>
-              Set your Group in Settings before starting a session.
-            </Text>
-            <TouchableOpacity
-              style={styles.warningButton}
-              onPress={() => router.push("/settings")}
-            >
-              <Text style={styles.warningButtonText}>Go to Settings →</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <View style={styles.warningBadge}>
-            <Text style={styles.warningTitle}>No group yet</Text>
-            <Text style={styles.warningText}>
-              Your teacher will place you in a group. You can connect a sensor now; your group will
-              appear here once assigned.
-            </Text>
-          </View>
-        ))}
+      {/* Item 7: only in Public/school aggregates — nothing is writable, so say so plainly
+          instead of prompting for a group that cannot be saved. */}
+      {!hasClassWorkspace ? (
+        <View style={styles.warningBadge}>
+          <Text style={styles.warningTitle}>No class yet</Text>
+          <Text style={styles.warningText}>
+            Your teacher needs to invite you to a class before you can record or upload data.
+          </Text>
+        </View>
+      ) : !groupSet ? (
+        <View style={styles.warningBadge}>
+          <Text style={styles.warningTitle}>Group not set</Text>
+          <Text style={styles.warningText}>
+            Choose your period and group in Settings before starting a session.
+          </Text>
+          <TouchableOpacity style={styles.warningButton} onPress={() => router.push("/settings")}>
+            <Text style={styles.warningButtonText}>Go to Settings →</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       {connectedDevice ? (
         <View style={styles.connectedBadge}>
@@ -71,14 +70,19 @@ export default function Index() {
             <Text style={styles.buttonText}>Connect Device</Text>
           </TouchableOpacity>
         ) : (
+          // Recording is pointless without a class to upload into, so it is disabled rather
+          // than allowed to produce data that can never leave the phone.
           <TouchableOpacity
-            style={styles.buttonPrimary}
+            style={[styles.buttonPrimary, !hasClassWorkspace && styles.buttonDisabled]}
             onPress={() => router.push("/session")}
+            disabled={!hasClassWorkspace}
           >
             <Text style={styles.buttonText}>New Session</Text>
           </TouchableOpacity>
         )}
 
+        {/* History stays reachable without a class: previously recorded sessions are still
+            viewable and exportable, only uploading is blocked. */}
         <TouchableOpacity
           style={styles.buttonPrimary}
           onPress={() => router.push("/history")}
@@ -112,6 +116,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff", alignItems: "center", justifyContent: "center", padding: 24 },
   title: { fontSize: 38, fontWeight: "bold", color: "#1a73e8", marginBottom: 4 },
   subtitle: { fontSize: 22, color: "#333", marginBottom: 8 },
+  className: { fontSize: 18, color: "#202124", fontWeight: "700", marginBottom: 2, textAlign: "center" },
   school: { fontSize: 16, color: "#888", marginBottom: 4, textAlign: "center" },
   groupInfo: { fontSize: 16, color: "#1a73e8", marginBottom: 16, fontWeight: "600" },
   warningBadge: { backgroundColor: "#fff3e0", borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14, marginBottom: 16, width: "100%", alignItems: "center" },
@@ -125,6 +130,7 @@ const styles = StyleSheet.create({
   disconnectedText: { color: "#888", fontSize: 16 },
   buttonContainer: { width: "100%", gap: 12 },
   buttonPrimary: { backgroundColor: "#1a73e8", padding: 16, borderRadius: 12, alignItems: "center" },
+  buttonDisabled: { opacity: 0.45 },
   buttonText: { color: "#fff", fontSize: 19, fontWeight: "600" },
   buttonOutline: { borderWidth: 1.5, borderColor: "#1a73e8", padding: 16, borderRadius: 12, alignItems: "center" },
   buttonOutlineText: { color: "#1a73e8", fontSize: 19, fontWeight: "600" },
