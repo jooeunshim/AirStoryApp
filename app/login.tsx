@@ -35,7 +35,15 @@ export default function Login() {
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  const { scrollRef, handleFocus, behavior, keyboardVerticalOffset } = useKeyboardAwareForm();
+  const {
+    scrollRef,
+    handleFocus,
+    onLayout,
+    onContentSizeChange,
+    keyboardAdjustStyle,
+    behavior,
+    keyboardVerticalOffset,
+  } = useKeyboardAwareForm();
 
   const handleLogin = async () => {
     if (busy) return;
@@ -64,9 +72,11 @@ export default function Login() {
     >
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, keyboardAdjustStyle]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        onLayout={onLayout}
+        onContentSizeChange={onContentSizeChange}
       >
         <View style={styles.card}>
           {/* Icon */}

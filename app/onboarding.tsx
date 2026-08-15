@@ -60,7 +60,15 @@ export default function Onboarding() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  const { scrollRef, handleFocus, behavior, keyboardVerticalOffset } = useKeyboardAwareForm();
+  const {
+    scrollRef,
+    handleFocus,
+    onLayout,
+    onContentSizeChange,
+    keyboardAdjustStyle,
+    behavior,
+    keyboardVerticalOffset,
+  } = useKeyboardAwareForm();
 
   const inviteToken = extractInviteToken(inviteInput);
 
@@ -208,9 +216,11 @@ export default function Onboarding() {
     >
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={styles.container}
+        contentContainerStyle={[styles.container, keyboardAdjustStyle]}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        onLayout={onLayout}
+        onContentSizeChange={onContentSizeChange}
       >
         <Text style={styles.title}>{isStudent ? "Join your class" : "Create your class"}</Text>
         <Text style={styles.body}>
