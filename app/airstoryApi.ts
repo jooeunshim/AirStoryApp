@@ -1,15 +1,7 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { apiRequest } from "./api/http";
 
-const BASE_URL = "https://air-sensor-api.onrender.com/api";
-
-const SHARED_EMAIL = "phg-students@airstory.local";
-const SHARED_PASSWORD = "phg-students-2026";
-
-const STORAGE_KEY_TOKEN = "airstory_token";
-const STORAGE_KEY_WORKSPACE = "airstory_workspace_id";
-const STORAGE_KEY_EXPIRES_AT = "airstory_token_expires_at";
-
-const TOKEN_LIFETIME_MS = 14 * 60 * 1000;
+// Auth is entirely Firebase now: apiRequest attaches the current ID token and the Firebase SDK
+// refreshes it, so this module holds no credentials, no token cache, and no expiry logic.
 
 export interface ImportRow {
   capturedAt: string;
@@ -39,128 +31,22 @@ export interface SessionMetadata {
   group?: string;
 }
 
-export interface AirStoryUser {
-  id: string;
-  email: string;
-  fullName: string;
-  workspaceId: string;
-}
-
-export interface LoginResponse {
-  accessToken: string;
-  refreshToken: string;
-  user: AirStoryUser;
-}
-
 export interface UploadResponse {
   [key: string]: unknown;
 }
 
-export interface AuthSession {
-  token: string;
-  workspaceId: string;
-}
-
-export async function loginToAirStory(): Promise<AuthSession> {
-  let response: Response;
-  try {
-    response = await fetch(`${BASE_URL}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: SHARED_EMAIL, password: SHARED_PASSWORD }),
-    });
-  } catch (e) {
-    throw new Error(`Network error during login: ${(e as Error).message}`);
-  }
-
-  if (!response.ok) {
-    let detail = "";
-    try {
-      detail = await response.text();
-    } catch {}
-    throw new Error(`Login failed (${response.status}): ${detail}`);
-  }
-
-  let data: LoginResponse;
-  try {
-    data = (await response.json()) as LoginResponse;
-  } catch (e) {
-    throw new Error(`Failed to parse login response: ${(e as Error).message}`);
-  }
-
-  const token = data.accessToken;
-  const workspaceId = data.user?.workspaceId;
-  if (!token || !workspaceId) {
-    throw new Error("Login response missing accessToken or workspaceId");
-  }
-
-  const expiresAt = Date.now() + TOKEN_LIFETIME_MS;
-  await AsyncStorage.multiSet([
-    [STORAGE_KEY_TOKEN, token],
-    [STORAGE_KEY_WORKSPACE, workspaceId],
-    [STORAGE_KEY_EXPIRES_AT, String(expiresAt)],
-  ]);
-
-  return { token, workspaceId };
-}
-
-export async function getStoredToken(): Promise<AuthSession | null> {
-  const entries = await AsyncStorage.multiGet([
-    STORAGE_KEY_TOKEN,
-    STORAGE_KEY_WORKSPACE,
-    STORAGE_KEY_EXPIRES_AT,
-  ]);
-  const map = Object.fromEntries(entries) as Record<string, string | null>;
-  const token = map[STORAGE_KEY_TOKEN];
-  const workspaceId = map[STORAGE_KEY_WORKSPACE];
-  const expiresAtStr = map[STORAGE_KEY_EXPIRES_AT];
-
-  if (!token || !workspaceId || !expiresAtStr) return null;
-
-  const expiresAt = parseInt(expiresAtStr, 10);
-  if (!Number.isFinite(expiresAt) || Date.now() >= expiresAt) return null;
-
-  return { token, workspaceId };
-}
-
-export async function getValidToken(): Promise<AuthSession> {
-  const stored = await getStoredToken();
-  if (stored) return stored;
-  return loginToAirStory();
-}
-
+/**
+ * Upload measurement rows into a workspace. Must be a *class* workspace — the backend rejects
+ * the Public and school aggregates as read-only.
+ */
 export async function uploadMeasurements(
   workspaceId: string,
-  token: string,
   rows: ImportRow[]
 ): Promise<UploadResponse> {
-  let response: Response;
-  try {
-    response = await fetch(`${BASE_URL}/workspaces/${workspaceId}/import/csv`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ rows }),
-    });
-  } catch (e) {
-    throw new Error(`Network error during upload: ${(e as Error).message}`);
-  }
-
-  if (!response.ok) {
-    let detail = "";
-    try {
-      detail = await response.text();
-    } catch {}
-    throw new Error(`Upload failed (${response.status}): ${detail}`);
-  }
-
-  try {
-    return (await response.json()) as UploadResponse;
-  } catch (e) {
-    throw new Error(`Failed to parse upload response: ${(e as Error).message}`);
-  }
+  return apiRequest(`/workspaces/${workspaceId}/import/csv`, {
+    method: "POST",
+    body: JSON.stringify({ rows }),
+  });
 }
 
 /**
@@ -168,32 +54,9 @@ export async function uploadMeasurements(
  * Used to sync the app's "uploaded" status with the backend's actual state.
  * If a teacher deleted data, the corresponding sessionCode won't appear here.
  */
-export async function fetchUploadedSessionCodes(
-  workspaceId: string,
-  token: string
-): Promise<string[]> {
-  const url = `${BASE_URL}/workspaces/${workspaceId}/measurements`;
-
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-    });
-  } catch (err) {
-    throw new Error(`Network error: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`Failed to fetch measurements (${response.status}): ${text}`);
-  }
-
-  const data = await response.json();
-  const measurements: any[] = data.measurements || [];
+export async function fetchUploadedSessionCodes(workspaceId: string): Promise<string[]> {
+  const data = await apiRequest(`/workspaces/${workspaceId}/measurements`);
+  const measurements: any[] = data?.measurements || [];
 
   const sessionCodes = new Set<string>();
   for (const m of measurements) {
@@ -334,17 +197,8 @@ export function convertCsvToImportRows(
   return rows;
 }
 
-// Test usage:
-// (async () => {
-//   const { token, workspaceId } = await getValidToken();
-//   console.log("Got token:", token.substring(0, 20) + "...");
-//   console.log("Workspace ID:", workspaceId);
-// })();
+// Upload example — the workspace id comes from useAuth().activeWorkspaceId (the class
+// workspace); the Firebase ID token is attached by apiRequest, so there is nothing to pass:
 //
-// Upload example:
-// (async () => {
-//   const { token, workspaceId } = await getValidToken();
-//   const rows = convertCsvToImportRows(csvText, { sessionName: "Demo" });
-//   const result = await uploadMeasurements(workspaceId, token, rows);
-//   console.log("Upload result:", result);
-// })();
+// const rows = convertCsvToImportRows(csvText, sessionMetadata);
+// const result = await uploadMeasurements(activeWorkspaceId, rows);

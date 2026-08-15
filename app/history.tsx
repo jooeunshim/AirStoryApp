@@ -5,7 +5,8 @@ import { useRouter } from "expo-router";
 import * as Sharing from "expo-sharing";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { convertCsvToImportRows, fetchUploadedSessionCodes, getValidToken, parseCsvLine, uploadMeasurements } from "./airstoryApi";
+import { convertCsvToImportRows, fetchUploadedSessionCodes, parseCsvLine, uploadMeasurements } from "./airstoryApi";
+import { useAuth } from "./authContext";
 
 const UPLOADED_IDS_KEY = "uploaded_session_ids";
 
@@ -17,6 +18,7 @@ interface Session {
 
 export default function History() {
   const router = useRouter();
+  const { profile, activeWorkspaceId } = useAuth();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [expandedIds, setExpandedIds] = useState<string[]>([]);
   const [csvCache, setCsvCache] = useState<Record<string, string>>({});
@@ -28,8 +30,13 @@ export default function History() {
   useEffect(() => {
     loadSessions();
     loadUploadedIds();
-    syncWithBackend();
   }, []);
+
+  // The class workspace resolves only after /auth/me returns, so sync once it is known
+  // (and again if it changes).
+  useEffect(() => {
+    if (activeWorkspaceId) syncWithBackend(activeWorkspaceId);
+  }, [activeWorkspaceId]);
 
   const loadUploadedIds = async () => {
     try {
@@ -43,10 +50,9 @@ export default function History() {
     }
   };
 
-  const syncWithBackend = async () => {
+  const syncWithBackend = async (workspaceId: string) => {
     try {
-      const { token, workspaceId } = await getValidToken();
-      const backendSessionCodes = await fetchUploadedSessionCodes(workspaceId, token);
+      const backendSessionCodes = await fetchUploadedSessionCodes(workspaceId);
 
       const stored = await AsyncStorage.getItem(UPLOADED_IDS_KEY);
       if (!stored) return;
@@ -151,9 +157,15 @@ export default function History() {
     try {
       setUploadingIds(prev => [...prev, session.id]);
 
-      const className = (await AsyncStorage.getItem("className")) || "";
-      const period = (await AsyncStorage.getItem("period")) || "";
-      const group = (await AsyncStorage.getItem("group")) || "";
+      if (!activeWorkspaceId) {
+        Alert.alert("No class workspace", "You are not in a class yet, so there is nowhere to upload.");
+        return;
+      }
+
+      // Class details come from the account profile (synced via /auth/me), not local storage.
+      const className = profile?.instructor || "";
+      const period = profile?.period || "";
+      const group = profile?.groupCode || "";
 
       if (!period || !group) {
         Alert.alert("Settings Required", "Please set your group in Settings first.");
@@ -177,8 +189,7 @@ export default function History() {
         return;
       }
 
-      const { token, workspaceId } = await getValidToken();
-      await uploadMeasurements(workspaceId, token, rows);
+      await uploadMeasurements(activeWorkspaceId, rows);
 
       setUploadedIds(prev => {
         const newIds = [...prev, session.id];
@@ -301,7 +312,7 @@ export default function History() {
         style={styles.buttonPrimary}
         onPress={() => {
           loadSessions();
-          syncWithBackend();
+          if (activeWorkspaceId) syncWithBackend(activeWorkspaceId);
         }}
       >
         <Text style={styles.buttonText}>Refresh</Text>
