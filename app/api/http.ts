@@ -3,7 +3,13 @@ import { auth } from "./firebase";
 // The backend mounts routes under `/api/...`, so the base must end at `/api`. On a phone there is
 // no window.location, so we default to the deployed Render API. Override for local backend testing
 // with EXPO_PUBLIC_API_BASE_URL (e.g. http://192.168.1.56:4000 — your Mac's LAN IP, not localhost).
-const DEFAULT_API_BASE = "https://air-sensor-api.onrender.com/api";
+//
+// This is the same service airstory.app talks to (its build sets REACT_APP_API_BASE_URL to the
+// same host). It is deliberately hardcoded rather than env-only: the previous host,
+// air-sensor-api.onrender.com, is dead — it completes the TLS handshake and then never responds,
+// so a build with no env vars silently hung forever instead of failing. Keep this pointing at the
+// live service so an unconfigured build cannot regress to a black hole.
+const DEFAULT_API_BASE = "https://airstory-web.onrender.com/api";
 
 function normalizeApiBase(raw?: string): string {
   const u = (raw || DEFAULT_API_BASE).trim().replace(/\/+$/, "");
