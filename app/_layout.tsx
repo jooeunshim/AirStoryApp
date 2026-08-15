@@ -1,6 +1,7 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { logout } from "./api/auth";
 import { AuthProvider, useAuth } from "./authContext";
@@ -101,19 +102,21 @@ const styles = StyleSheet.create({
 
 export default function RootLayout() {
   return (
-    <SafeAreaProvider>
-      <AuthProvider>
-        <BLEProvider>
-          <AuthGate>
-            <Stack>
-              <Stack.Screen name="index" options={{ title: "Home" }} />
-              <Stack.Screen name="history" options={{ title: "Session History" }} />
-              <Stack.Screen name="login" options={{ headerShown: false }} />
-              <Stack.Screen name="onboarding" options={{ title: "Set up your account" }} />
-            </Stack>
-          </AuthGate>
-        </BLEProvider>
-      </AuthProvider>
-    </SafeAreaProvider>
+    <KeyboardProvider>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <BLEProvider>
+            <AuthGate>
+              <Stack>
+                <Stack.Screen name="index" options={{ title: "Home" }} />
+                <Stack.Screen name="history" options={{ title: "Session History" }} />
+                <Stack.Screen name="login" options={{ headerShown: false }} />
+                <Stack.Screen name="onboarding" options={{ title: "Set up your account" }} />
+              </Stack>
+            </AuthGate>
+          </BLEProvider>
+        </AuthProvider>
+      </SafeAreaProvider>
+    </KeyboardProvider>
   );
 }

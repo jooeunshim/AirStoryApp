@@ -3,16 +3,17 @@ import { useRouter } from "expo-router";
 import { useState } from "react";
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { login } from "./api/auth";
-import { useKeyboardAwareForm } from "./useKeyboardAwareForm";
+
+/** Gap kept between the focused field and the top of the keyboard. */
+const FOCUS_OFFSET = 28;
 
 /** Turn raw Firebase auth error codes into friendly copy. */
 function friendlyAuthError(e: any): string {
@@ -35,16 +36,6 @@ export default function Login() {
   const [error, setError] = useState("");
   const [showPassword, setShowPassword] = useState(false);
 
-  const {
-    scrollRef,
-    handleFocus,
-    onLayout,
-    onContentSizeChange,
-    keyboardAdjustStyle,
-    behavior,
-    keyboardVerticalOffset,
-  } = useKeyboardAwareForm();
-
   const handleLogin = async () => {
     if (busy) return;
     setError("");
@@ -65,19 +56,13 @@ export default function Login() {
   };
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAwareScrollView
       style={styles.flex}
-      behavior={behavior}
-      keyboardVerticalOffset={keyboardVerticalOffset}
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      bottomOffset={FOCUS_OFFSET}
     >
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={[styles.container, keyboardAdjustStyle]}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        onLayout={onLayout}
-        onContentSizeChange={onContentSizeChange}
-      >
         <View style={styles.card}>
           {/* Icon */}
           <View style={styles.iconWrap}>
@@ -96,7 +81,6 @@ export default function Login() {
             placeholderTextColor="#9aa0a6"
             value={email}
             onChangeText={setEmail}
-            onFocus={handleFocus}
             autoCapitalize="none"
             keyboardType="email-address"
             autoComplete="email"
@@ -112,7 +96,6 @@ export default function Login() {
               placeholderTextColor="#9aa0a6"
               value={password}
               onChangeText={setPassword}
-              onFocus={handleFocus}
               secureTextEntry={!showPassword}
               autoComplete="password"
               editable={!busy}
@@ -180,8 +163,7 @@ export default function Login() {
             <Text style={styles.signupText}>Need an account? Sign up</Text>
           </TouchableOpacity>
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAwareScrollView>
   );
 }
 

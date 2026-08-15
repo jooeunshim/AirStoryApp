@@ -2,7 +2,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useKeyboardAwareForm } from "./useKeyboardAwareForm";
+import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import {
   extractInviteToken,
   getInvitePreview,
@@ -26,6 +25,9 @@ type Mode = "choose" | "student" | "teacher";
 // Backend tokens are 32 random bytes as base64url (43 chars); the schema accepts 20–128. Use the
 // schema's floor as the "looks like a token" threshold so we don't preview obvious typos.
 const MIN_TOKEN_LENGTH = 20;
+
+/** Gap kept between the focused field and the top of the keyboard. */
+const FOCUS_OFFSET = 28;
 
 /** Firebase sign-up error codes -> copy a student can act on. */
 function friendlyAuthError(e: any): string {
@@ -59,16 +61,6 @@ export default function Onboarding() {
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
-
-  const {
-    scrollRef,
-    handleFocus,
-    onLayout,
-    onContentSizeChange,
-    keyboardAdjustStyle,
-    behavior,
-    keyboardVerticalOffset,
-  } = useKeyboardAwareForm();
 
   const inviteToken = extractInviteToken(inviteInput);
 
@@ -209,19 +201,13 @@ export default function Onboarding() {
   const isStudent = mode === "student";
 
   return (
-    <KeyboardAvoidingView
+    <KeyboardAwareScrollView
       style={styles.flex}
-      behavior={behavior}
-      keyboardVerticalOffset={keyboardVerticalOffset}
+      contentContainerStyle={styles.container}
+      keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
+      bottomOffset={FOCUS_OFFSET}
     >
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={[styles.container, keyboardAdjustStyle]}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        onLayout={onLayout}
-        onContentSizeChange={onContentSizeChange}
-      >
         <Text style={styles.title}>{isStudent ? "Join your class" : "Create your class"}</Text>
         <Text style={styles.body}>
           {isStudent
@@ -238,7 +224,6 @@ export default function Onboarding() {
               placeholderTextColor="#9aa0a6"
               value={inviteInput}
               onChangeText={setInviteInput}
-              onFocus={handleFocus}
               autoCapitalize="none"
               autoCorrect={false}
               multiline
@@ -280,7 +265,6 @@ export default function Onboarding() {
               placeholderTextColor="#9aa0a6"
               value={workspaceName}
               onChangeText={setWorkspaceName}
-              onFocus={handleFocus}
               maxLength={80}
               editable={!submitting}
             />
@@ -294,7 +278,6 @@ export default function Onboarding() {
           placeholderTextColor="#9aa0a6"
           value={fullName}
           onChangeText={setFullName}
-          onFocus={handleFocus}
           maxLength={80}
           editable={!submitting}
         />
@@ -312,7 +295,6 @@ export default function Onboarding() {
               placeholderTextColor="#9aa0a6"
               value={email}
               onChangeText={setEmail}
-              onFocus={handleFocus}
               autoCapitalize="none"
               keyboardType="email-address"
               autoComplete="email"
@@ -327,7 +309,6 @@ export default function Onboarding() {
                 placeholderTextColor="#9aa0a6"
                 value={password}
                 onChangeText={setPassword}
-                onFocus={handleFocus}
                 secureTextEntry={!showPassword}
                 editable={!submitting}
               />
@@ -372,8 +353,7 @@ export default function Onboarding() {
         >
           <Text style={styles.linkText}>Back</Text>
         </TouchableOpacity>
-      </ScrollView>
-    </KeyboardAvoidingView>
+    </KeyboardAwareScrollView>
   );
 }
 
