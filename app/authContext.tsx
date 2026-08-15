@@ -83,6 +83,8 @@ interface AuthContextType {
   activeWorkspaceId: string | null;
   /** Full class membership from the last successful /auth/me; null when offline. */
   activeMembership: Membership | null;
+  /** Last /auth/me failure that isn't "needs onboarding" (401 / 500 / offline / timeout). */
+  meError: string | null;
   needsOnboarding: boolean;
   loadingMe: boolean;
   refreshMe: () => Promise<void>;
@@ -96,6 +98,7 @@ const AuthContext = createContext<AuthContextType>({
   role: "",
   activeWorkspaceId: null,
   activeMembership: null,
+  meError: null,
   needsOnboarding: false,
   loadingMe: false,
   refreshMe: async () => {},
@@ -108,6 +111,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [cachedProfile, setCachedProfile] = useState<Profile | null>(null);
   const [needsOnboarding, setNeedsOnboarding] = useState(false);
   const [loadingMe, setLoadingMe] = useState(false);
+  const [meError, setMeError] = useState<string | null>(null);
 
   // Hydrate the cached profile from disk on launch so it's available before (or instead of)
   // a successful /auth/me when offline.
@@ -123,24 +127,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!auth.currentUser) {
       setMe(null);
       setNeedsOnboarding(false);
+      setMeError(null);
+      // Must clear here too: callers set loadingMe before invoking us, so returning without
+      // clearing it strands the router gate on its spinner forever.
+      setLoadingMe(false);
       return;
     }
     setLoadingMe(true);
+    setMeError(null);
     try {
       const data = await getMe();
       setMe(data);
       setNeedsOnboarding(false);
+      setMeError(null);
       const norm = normalizeProfile(data);
       if (norm) {
         setCachedProfile(norm);
         AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify(norm)).catch(() => {});
       }
     } catch (e: any) {
-      // "no account" 401 => onboarding. Any other error (offline / transient) leaves state
-      // untouched so the cached profile remains the offline fallback.
-      if (String(e?.message || "").toLowerCase().includes("no account")) {
+      const message = String(e?.message || "Could not load your account.");
+      if (message.toLowerCase().includes("no account")) {
+        // Signed in to Firebase but not provisioned yet -> onboarding, not an error.
         setMe(null);
         setNeedsOnboarding(true);
+        setMeError(null);
+      } else {
+        // Everything else (401 / 500 / offline / timeout) is recorded so the UI can show it.
+        // State is otherwise left alone, so a cached profile still serves offline use.
+        setMeError(message);
       }
     } finally {
       setLoadingMe(false);
@@ -158,6 +173,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setMe(null);
         setNeedsOnboarding(false);
         setLoadingMe(false);
+        setMeError(null);
         setCachedProfile(null);
         AsyncStorage.removeItem(PROFILE_CACHE_KEY).catch(() => {});
       }
@@ -183,6 +199,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role,
         activeWorkspaceId,
         activeMembership,
+        meError,
         needsOnboarding,
         loadingMe,
         refreshMe,

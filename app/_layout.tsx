@@ -1,7 +1,8 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect } from "react";
-import { ActivityIndicator, View } from "react-native";
+import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { logout } from "./api/auth";
 import { AuthProvider, useAuth } from "./authContext";
 import { BLEProvider } from "./bleContext";
 
@@ -9,7 +10,7 @@ import { BLEProvider } from "./bleContext";
 const PUBLIC_ROUTES = ["login", "onboarding"];
 
 function AuthGate({ children }: { children: React.ReactNode }) {
-  const { initializing, user, needsOnboarding, loadingMe } = useAuth();
+  const { initializing, user, profile, meError, needsOnboarding, loadingMe, refreshMe } = useAuth();
   const segments = useSegments();
   const router = useRouter();
   // The index route ("/") has no first segment.
@@ -40,8 +41,48 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Signed in, but /auth/me failed and there's no cached profile to fall back on. Say so instead
+  // of dropping the user on an empty Home screen. If a cached profile exists we fall through and
+  // let the app run offline — that path is the whole point of the cache.
+  if (user && meError && !profile && !needsOnboarding) {
+    return (
+      <View style={styles.errorScreen}>
+        <Text style={styles.errorTitle}>Can&apos;t load your account</Text>
+        <Text style={styles.errorBody}>{meError}</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={() => refreshMe()}>
+          <Text style={styles.retryText}>Try Again</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.signOutBtn} onPress={() => logout()}>
+          <Text style={styles.signOutText}>Sign Out</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   return <>{children}</>;
 }
+
+const styles = StyleSheet.create({
+  errorScreen: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    padding: 28,
+  },
+  errorTitle: { fontSize: 22, fontWeight: "800", color: "#202124", textAlign: "center", marginBottom: 12 },
+  errorBody: { fontSize: 15, color: "#5f6368", textAlign: "center", lineHeight: 22, marginBottom: 28 },
+  retryBtn: {
+    backgroundColor: "#1a73e8",
+    borderRadius: 16,
+    paddingVertical: 15,
+    paddingHorizontal: 40,
+    alignItems: "center",
+  },
+  retryText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  signOutBtn: { padding: 14, marginTop: 8 },
+  signOutText: { color: "#c5221f", fontSize: 15, fontWeight: "600" },
+});
 
 export default function RootLayout() {
   return (
